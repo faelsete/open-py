@@ -14,6 +14,8 @@ from aiogram.types import BotCommand
 
 from shared.config import TelegramConfig
 from shared.logger import get_logger
+from core.rate_limiter import RateLimiter
+from core.audit_log import AuditLog
 
 log = get_logger("telegram")
 
@@ -35,6 +37,21 @@ class TelegramBot:
             )
         )
         self.dp = Dispatcher()
+
+        # Rate limiter: 1 msg/s per-chat, 20 msg/s global
+        self.rate_limiter = RateLimiter(
+            per_chat_rate=1.0,
+            per_chat_burst=5,
+            global_rate=20.0,
+            global_burst=30,
+        )
+
+        # Audit log
+        install_dir = getattr(config, 'install_dir', '/opt/open-py')
+        self.audit = AuditLog(
+            log_dir=f"{core.config.core.install_dir}/data/audit"
+            if hasattr(core, 'config') else "/opt/open-py/data/audit"
+        )
 
         # Registrar handlers
         self._register_handlers()
@@ -216,11 +233,52 @@ class TelegramBot:
                 return
             await message.reply(f"🎭 **Essence.md**\n\n{self.core._essence[:3000]}")
 
+        # === AUDIT ===
+        @self.dp.message(Command("audit"))
+        async def cmd_audit(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            chain = await self.audit.verify_chain()
+            stats = await self.audit.get_stats()
+            chain_emoji = "🟢" if chain["valid"] else "🔴"
+            text = (
+                f"{chain_emoji} **Audit Log**\n\n"
+                f"Chain: {'Válida' if chain['valid'] else 'CORROMPIDA'}\n"
+                f"Entradas hoje: {chain['entries']}\n"
+                f"Total histórico: {stats.get('total_entries', 0)}\n"
+                f"Arquivos: {stats.get('total_files', 0)}\n"
+            )
+            if not chain["valid"]:
+                text += f"\n⚠️ Quebra detectada na entrada {chain['broken_at']}\n"
+                text += f"Razão: {chain.get('reason', 'desconhecida')}\n"
+            # Últimas entradas
+            recent = await self.audit.get_recent(5)
+            if recent:
+                text += "\n**Últimas ações:**\n"
+                for entry in recent:
+                    text += f"• `{entry['action']}` por {entry['actor']} \u2192 {entry.get('target', '-')}\n"
+            await message.reply(text)
+
         # === MENSAGENS DE TEXTO (catch-all) ===
         @self.dp.message(F.text)
         async def handle_text(message: types.Message):
             if not self._is_authorized(message.from_user.id):
                 return
+
+            # Rate limit check
+            check = await self.rate_limiter.check(
+                chat_id=message.chat.id,
+                message_text=message.text,
+            )
+            if not check["allowed"]:
+                if check["reason"] == "duplicate":
+                    return  # Silenciosamente ignora duplicatas
+                await message.reply(
+                    f"⚠️ Rate limit atingido. Tente novamente em "
+                    f"{check['retry_after']:.1f}s"
+                )
+                return
+
             await message.chat.do("typing")
             result = await self.core.process(
                 input_text=message.text,

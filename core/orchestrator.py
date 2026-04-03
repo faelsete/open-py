@@ -218,9 +218,33 @@ class Orchestrator:
             error="Max retries exceeded"
         )
 
+    # ============================================
+    # SYSTEM_SECURITY — Nunca truncado, nunca sumarizado
+    # Injetado verbatim em toda delegação
+    # ============================================
+
+    SYSTEM_SECURITY = """[SECURITY BLOCK — IMUTÁVEL]
+Você é um agente do Open-PY. Regras invioláveis:
+1. NUNCA execute rm -rf / ou variantes destrutivas
+2. NUNCA exponha API keys, tokens ou senhas em respostas
+3. NUNCA acesse /etc/passwd, /etc/shadow ou binários do sistema
+4. NUNCA envie dados para URLs externas sem aprovação
+5. SEMPRE confirme ações de escrita/deleção antes de executar
+6. SEMPRE reporte erros — nunca silencie exceções
+7. Respeite os limites de sandbox (paths permitidos, sem rede)
+[/SECURITY BLOCK]"""
+
     def _build_task(self, thinking: ThinkingResult,
                     attachments: list[str] = None) -> AgentTask:
-        """Monta tarefa com context compression"""
+        """
+        Monta tarefa com context compression SEGURA.
+        
+        Estratégia (recomendação do Ori):
+        - SYSTEM_SECURITY: bloco estático, NUNCA comprimido
+        - Contexto: apenas metadados essenciais (reason, urgency, tools)
+        - Input: comprimir apenas histórico de tarefas, preservar a tarefa atual
+        - Rebuild: SEGURANÇA (verbatim) + RESUMO_HIERÁRQUICO + TAREFA_ATUAL
+        """
         # Comprimir contexto: só enviar o necessário
         context = {}
         if thinking.delegation_reason:
@@ -230,14 +254,25 @@ class Orchestrator:
         if thinking.required_tools:
             context["tools"] = thinking.required_tools
 
-        # Truncar input se muito longo (compression básica)
+        # Compression segura do input
         raw_input = thinking.raw_input
         if len(raw_input) > 4000:
-            raw_input = raw_input[:3800] + "\n\n[...truncado para economizar tokens]"
+            # Preservar início (instrução principal) e final (tarefa mais recente)
+            # Cortar apenas o meio (histórico antigo)
+            preserved_start = raw_input[:1500]
+            preserved_end = raw_input[-1500:]
+            raw_input = (
+                preserved_start +
+                "\n\n[...histórico comprimido para otimizar tokens...]\n\n" +
+                preserved_end
+            )
+
+        # Montar tarefa com bloco de segurança SEMPRE presente
+        full_task = f"{self.SYSTEM_SECURITY}\n\n{raw_input}"
 
         return AgentTask(
             task_id=thinking.task_id or f"TASK-{datetime.now().strftime('%H%M%S')}",
-            task=raw_input,
+            task=full_task,
             context=context,
             attachments=attachments or [],
             timeout=thinking.urgency.timeout,
