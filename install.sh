@@ -118,27 +118,51 @@ for pkg in "${PACKAGES[@]}"; do
     fi
 done
 
-# pgvector
-PG_VERSION=$(pg_config --version 2>/dev/null | grep -oP '\d+' | head -1 || echo "16")
+# pgvector — precisa de headers do servidor para compilar
+PG_VERSION=$(pg_config --version 2>/dev/null | grep -oP '\d+' | head -1 || echo "14")
+
+# Instalar headers do servidor (necessário para compilação de extensões)
+if ! dpkg -s "postgresql-server-dev-${PG_VERSION}" &>/dev/null 2>&1; then
+    step "Instalando headers do PostgreSQL $PG_VERSION..."
+    apt-get install -y -qq "postgresql-server-dev-${PG_VERSION}" >> "$LOG_FILE" 2>&1 || {
+        # Tenta pacote genérico
+        apt-get install -y -qq "postgresql-server-dev-all" >> "$LOG_FILE" 2>&1 || true
+    }
+fi
+
 if ! dpkg -s "postgresql-${PG_VERSION}-pgvector" &>/dev/null 2>&1; then
     step "Instalando pgvector..."
-    if apt-get install -y -qq "postgresql-${PG_VERSION}-pgvector" >> "$LOG_FILE" 2>&1; then
-        ok "pgvector (apt)"
-    else
-        warn "Compilando pgvector do fonte..."
-        cd /tmp
-        rm -rf pgvector 2>/dev/null
-        if git clone --branch v0.7.4 https://github.com/pgvector/pgvector.git >> "$LOG_FILE" 2>&1; then
-            cd pgvector
-            if make >> "$LOG_FILE" 2>&1 && make install >> "$LOG_FILE" 2>&1; then
-                ok "pgvector (compilado)"
-            else
-                fail "pgvector — compilação falhou"
-            fi
-            cd /tmp && rm -rf pgvector
+
+    # Método 1: Tentar via PGDG repo (mais confiável)
+    if ! apt-get install -y -qq "postgresql-${PG_VERSION}-pgvector" >> "$LOG_FILE" 2>&1; then
+        # Método 2: Adicionar PGDG repo e tentar de novo
+        step "Adicionando repositório PostgreSQL oficial..."
+        sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list' 2>/dev/null || true
+        wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - >> "$LOG_FILE" 2>&1 || true
+        apt-get update -qq >> "$LOG_FILE" 2>&1 || true
+
+        if apt-get install -y -qq "postgresql-${PG_VERSION}-pgvector" >> "$LOG_FILE" 2>&1; then
+            ok "pgvector (PGDG repo)"
         else
-            fail "pgvector — git clone falhou"
+            # Método 3: Compilar do fonte com headers corretos
+            warn "Compilando pgvector do fonte..."
+            cd /tmp
+            rm -rf pgvector 2>/dev/null
+            if git clone --branch v0.7.4 https://github.com/pgvector/pgvector.git >> "$LOG_FILE" 2>&1; then
+                cd pgvector
+                if make PG_CONFIG=$(which pg_config) >> "$LOG_FILE" 2>&1 && make install PG_CONFIG=$(which pg_config) >> "$LOG_FILE" 2>&1; then
+                    ok "pgvector (compilado)"
+                else
+                    fail "pgvector — compilação falhou (ver $LOG_FILE)"
+                    info "O sistema funciona sem pgvector, mas sem busca semântica"
+                fi
+                cd /tmp && rm -rf pgvector
+            else
+                fail "pgvector — git clone falhou"
+            fi
         fi
+    else
+        ok "pgvector (apt)"
     fi
 else
     ok "pgvector"
