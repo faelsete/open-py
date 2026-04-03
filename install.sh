@@ -206,9 +206,19 @@ else
 fi
 
 # Criar diretórios de dados
-mkdir -p "$DATA_DIR"/{agents,memory/daily,media/{photo,audio,video,document},tools/custom,backups,logs}
+mkdir -p "$DATA_DIR"/{agents,memory/daily,media/{photo,audio,video,document},tools/custom,backups,logs,audit,identity_versions}
 mkdir -p /tmp/open-py/agents
 ok "Estrutura de diretórios criada"
+
+# Copiar templates de identidade (agente nasce em branco)
+if [[ ! -f "$DATA_DIR/soul.md" ]]; then
+    cp "$INSTALL_DIR/data/soul.md.example" "$DATA_DIR/soul.md"
+    ok "soul.md criado (agente em branco — onboarding ativo)"
+fi
+if [[ ! -f "$DATA_DIR/essence.md" ]]; then
+    cp "$INSTALL_DIR/data/essence.md.example" "$DATA_DIR/essence.md"
+    ok "essence.md criado (personalidade padrão)"
+fi
 
 # ═══════════════════════════════════════════════════════════
 # [3/8] POSTGRESQL
