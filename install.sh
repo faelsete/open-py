@@ -344,7 +344,7 @@ fetch_models() {
     fi
 }
 
-# ─── Função: selecionar modelo com lista numerada ───
+# ─── Função: selecionar modelo com paginação ───
 select_model() {
     local api_key="$1"
     local base_url="$2"
@@ -379,33 +379,99 @@ select_model() {
         return
     fi
 
-    # Mostrar lista (máx 40 por página)
-    local show_max=40
-    echo ""
-    echo -e "  ${BOLD}📋 Modelos disponíveis (${total} encontrados):${NC}"
-    echo ""
+    # ─── Paginação interativa ───
+    local page_size=30
+    local page=0
+    local total_pages=$(( (total + page_size - 1) / page_size ))
 
-    local i=1
-    for m in "${model_array[@]}"; do
-        if [[ $i -le $show_max ]]; then
-            printf "    ${CYAN}%3d${NC} — %s\n" "$i" "$m"
+    while true; do
+        local start=$((page * page_size))
+        local end=$((start + page_size))
+        [[ $end -gt $total ]] && end=$total
+        local current_page=$((page + 1))
+
+        echo ""
+        echo -e "  ${BOLD}📋 Modelos disponíveis — Página ${current_page}/${total_pages} (${total} modelos)${NC}"
+        echo ""
+
+        local i=$((start + 1))
+        for idx in $(seq $start $((end - 1))); do
+            printf "    ${CYAN}%3d${NC} — %s\n" "$i" "${model_array[$idx]}"
+            ((i++))
+        done
+
+        echo ""
+        if [[ $total_pages -gt 1 ]]; then
+            echo -e "  ${DIM}Enter = próxima página | /buscar = filtrar | ou digite número/nome${NC}"
         fi
-        ((i++))
+        echo -ne "  ${BOLD}Modelo ${prompt_label}: ${NC}"
+        safe_read _choice
+
+        # Enter = próxima página
+        if [[ -z "$_choice" ]]; then
+            page=$(( (page + 1) % total_pages ))
+            continue
+        fi
+
+        # /buscar ou /search = filtrar
+        if [[ "$_choice" == /buscar* ]] || [[ "$_choice" == /search* ]] || [[ "$_choice" == /b* ]]; then
+            local search_term="${_choice#*/buscar }"
+            [[ "$_choice" == /search* ]] && search_term="${_choice#*/search }"
+            [[ "$_choice" == /b* ]] && search_term="${_choice#*/b }"
+            search_term=$(echo "$search_term" | tr '[:upper:]' '[:lower:]')
+
+            if [[ -n "$search_term" ]] && [[ "$search_term" != "$_choice" ]]; then
+                echo ""
+                echo -e "  ${BOLD}🔍 Resultados para '${search_term}':${NC}"
+                echo ""
+                local found=0
+                for idx in $(seq 0 $((total - 1))); do
+                    local lower_model=$(echo "${model_array[$idx]}" | tr '[:upper:]' '[:lower:]')
+                    if [[ "$lower_model" == *"$search_term"* ]]; then
+                        printf "    ${CYAN}%3d${NC} — %s\n" "$((idx + 1))" "${model_array[$idx]}"
+                        ((found++))
+                    fi
+                done
+                if [[ $found -eq 0 ]]; then
+                    warn "Nenhum modelo encontrado com '$search_term'"
+                fi
+            else
+                echo -ne "  ${CYAN}Termo de busca: ${NC}"
+                safe_read search_term
+                search_term=$(echo "$search_term" | tr '[:upper:]' '[:lower:]')
+                echo ""
+                echo -e "  ${BOLD}🔍 Resultados para '${search_term}':${NC}"
+                echo ""
+                local found=0
+                for idx in $(seq 0 $((total - 1))); do
+                    local lower_model=$(echo "${model_array[$idx]}" | tr '[:upper:]' '[:lower:]')
+                    if [[ "$lower_model" == *"$search_term"* ]]; then
+                        printf "    ${CYAN}%3d${NC} — %s\n" "$((idx + 1))" "${model_array[$idx]}"
+                        ((found++))
+                    fi
+                done
+                if [[ $found -eq 0 ]]; then
+                    warn "Nenhum modelo encontrado com '$search_term'"
+                fi
+            fi
+            continue
+        fi
+
+        # Número = selecionar da lista
+        if [[ "$_choice" =~ ^[0-9]+$ ]] && [[ "$_choice" -ge 1 ]] && [[ "$_choice" -le "$total" ]]; then
+            local selected="${model_array[$((_choice-1))]}"
+            echo -e "  ${GREEN}✓${NC} Selecionado: ${BOLD}${selected}${NC}"
+            eval "$result_var=\"$selected\""
+            return
+        fi
+
+        # Texto = nome direto do modelo
+        if [[ -n "$_choice" ]]; then
+            echo -e "  ${GREEN}✓${NC} Modelo: ${BOLD}${_choice}${NC}"
+            eval "$result_var=\"\$_choice\""
+            return
+        fi
     done
-
-    if [[ "$total" -gt "$show_max" ]]; then
-        echo -e "    ${DIM}... e mais $((total - show_max)) modelos (digite o nome para escolher outro)${NC}"
-    fi
-
-    echo ""
-    echo -ne "  ${BOLD}Escolha o número ou digite o nome do modelo ${prompt_label}: ${NC}"
-    safe_read _choice
-
-    if [[ "$_choice" =~ ^[0-9]+$ ]] && [[ "$_choice" -ge 1 ]] && [[ "$_choice" -le "$total" ]]; then
-        eval "$result_var=\"${model_array[$((_choice-1))]}\""
-    else
-        eval "$result_var=\"\$_choice\""
-    fi
 }
 
 echo -e "  Selecione os provedores de IA:"
