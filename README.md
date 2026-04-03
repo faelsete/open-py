@@ -1,6 +1,18 @@
 # 🧠 Open-PY — Framework de Agentes Autônomos
 
 <p align="center">
+  <img src="assets/logo.png" alt="Open-PY Logo" width="200">
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL-3.0"></a>
+  <img src="https://img.shields.io/badge/version-2.2.0-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/platform-Ubuntu%2022.04%2B-orange.svg" alt="Platform">
+  <img src="https://img.shields.io/badge/PostgreSQL-16%2B-336791.svg" alt="PostgreSQL">
+</p>
+
+<p align="center">
   <b>Framework 100% Python para criação e orquestração de agentes autônomos inteligentes</b><br>
   <i>Roda nativamente em Linux • Telegram como frontend • PostgreSQL como memória de longo prazo</i>
 </p>
@@ -663,7 +675,21 @@ pgvector>=0.2         # pgvector Python client
 
 ## 📋 Changelog
 
-### v2.0.0 (Atual)
+### v2.2.0 (Atual)
+- 🐍 Logo oficial do Open-PY
+- 🔒 Licença migrada para AGPL-3.0 (proteção contra uso comercial fechado)
+- 🔗 Base URLs pré-configuradas para todos os provedores
+- 📦 pgvector com 3 fallbacks (apt → PGDG → compilação)
+- 🔧 Service ExecStart corrigido para __main__.py
+- 📝 API keys e tokens visíveis durante digitação
+- 👥 Templates de Issue, PR, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY
+
+### v2.1.0
+- 🐛 Fix: leitura de input via pipe (curl | bash → /dev/tty)
+- 🐛 Fix: PostgreSQL retry com pg_isready
+- 🐛 Fix: headers do servidor para compilação pgvector
+
+### v2.0.0
 - 🧠 Thinking Engine com 4 camadas
 - 🤖 6 agentes builtin com permissões granulares
 - 💾 Memória em 3 camadas (RAM → MD → PostgreSQL)
@@ -679,10 +705,13 @@ pgvector>=0.2         # pgvector Python client
 
 ## 📜 Licença
 
-MIT License — Use livremente.
+**AGPL-3.0** — Pode usar, modificar e distribuir livremente, **desde que mantenha o código aberto** e preserve os créditos do autor original.
+
+Veja o arquivo [LICENSE](LICENSE) para detalhes completos.
 
 ---
 
 <p align="center">
-  <b>Feito com 🧠 por Open-PY Framework</b>
+  <b>Feito com 🧠 por Open-PY Framework</b><br>
+  <i>Copyright © 2026 faelsete. Todos os direitos reservados sob AGPL-3.0.</i>
 </p>

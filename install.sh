@@ -342,7 +342,7 @@ for p in "${PROVIDERS[@]}"; do
         1)
             echo ""
             echo -ne "  ${CYAN}OpenAI API Key: ${NC}"
-            safe_read_secret OPENAI_KEY; echo ""
+            safe_read OPENAI_KEY
             echo -ne "  ${CYAN}Base URL (Enter = https://api.openai.com/v1): ${NC}"
             safe_read OA_BASE
             [[ -n "$OA_BASE" ]] && OPENAI_BASE="$OA_BASE"
@@ -353,7 +353,7 @@ for p in "${PROVIDERS[@]}"; do
         2)
             echo ""
             echo -ne "  ${CYAN}Anthropic API Key: ${NC}"
-            safe_read_secret ANTHROPIC_KEY; echo ""
+            safe_read ANTHROPIC_KEY
             echo -ne "  ${CYAN}Base URL (Enter = https://api.anthropic.com): ${NC}"
             safe_read AN_BASE
             [[ -n "$AN_BASE" ]] && ANTHROPIC_BASE="$AN_BASE"
@@ -364,7 +364,7 @@ for p in "${PROVIDERS[@]}"; do
         3)
             echo ""
             echo -ne "  ${CYAN}OpenRouter API Key: ${NC}"
-            safe_read_secret OPENROUTER_KEY; echo ""
+            safe_read OPENROUTER_KEY
             echo -ne "  ${CYAN}Base URL (Enter = https://openrouter.ai/api/v1): ${NC}"
             safe_read OR_BASE
             [[ -n "$OR_BASE" ]] && OPENROUTER_BASE="$OR_BASE"
@@ -376,7 +376,7 @@ for p in "${PROVIDERS[@]}"; do
             echo ""
             info "Base URL padrão: https://integrate.api.nvidia.com/v1"
             echo -ne "  ${CYAN}NVIDIA NIM API Key (nvapi-...): ${NC}"
-            safe_read_secret NVIDIA_KEY; echo ""
+            safe_read NVIDIA_KEY
             echo -ne "  ${CYAN}Base URL (Enter = https://integrate.api.nvidia.com/v1): ${NC}"
             safe_read NV_BASE
             [[ -n "$NV_BASE" ]] && NVIDIA_BASE="$NV_BASE"
@@ -394,7 +394,7 @@ for p in "${PROVIDERS[@]}"; do
             echo -ne "  ${CYAN}Base URL: ${NC}"
             safe_read OPENCODE_BASE
             echo -ne "  ${CYAN}API Key: ${NC}"
-            safe_read_secret OPENCODE_KEY; echo ""
+            safe_read OPENCODE_KEY
             echo -ne "  ${CYAN}Nome do modelo: ${NC}"
             safe_read CUSTOM_MODEL
             OPENCODE_ENABLED=true
@@ -422,7 +422,7 @@ echo ""
 echo -e "  Para seu User ID: envie ${CYAN}/start${NC} para ${CYAN}@userinfobot${NC}"
 echo ""
 echo -ne "  ${BOLD}Token do Bot: ${NC}"
-safe_read_secret BOT_TOKEN; echo ""
+safe_read BOT_TOKEN
 echo -ne "  ${BOLD}Seu Telegram User ID: ${NC}"
 safe_read TELEGRAM_USER_ID
 
@@ -562,7 +562,7 @@ Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
 Environment=OPENPY_DIR=$INSTALL_DIR
-ExecStart=$VENV_DIR/bin/python3 -m __main__
+ExecStart=$VENV_DIR/bin/python3 $INSTALL_DIR/__main__.py
 Restart=always
 RestartSec=5
 StandardOutput=journal
