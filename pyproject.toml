@@ -1,0 +1,13 @@
+[project]
+name = "open-py"
+version = "1.0.0"
+description = "Framework de Agentes Autônomos Inteligentes para Linux"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*", "memory*", "agents*", "tools*", "providers*", "telegram_bot*", "scheduler*", "doctor*", "shared*"]

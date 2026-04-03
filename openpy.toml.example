@@ -1,0 +1,70 @@
+# ═══════════════════════════════════════════════
+# Open-PY — Configuração (Template)
+# Copie para openpy.toml e preencha seus dados
+# ═══════════════════════════════════════════════
+
+[core]
+name = "Open-PY"
+version = "2.0.0"
+language = "pt-BR"
+default_model = ""                            # Ex: google/gemma-4-31b-it
+fallback_model = ""                           # Ex: qwen/qwen3-coder-480b-a35b-instruct
+max_concurrent_agents = 10
+thinking_layers = 4
+install_dir = "/opt/open-py"
+
+[database]
+host = "localhost"
+port = 5432
+name = "openpy"
+user = "openpy"
+password = ""                                  # Gerada automaticamente pelo instalador
+
+[telegram]
+bot_token = ""                                 # Token do @BotFather
+allowed_users = []                             # Seu Telegram User ID (int)
+max_message_length = 4096
+polling_mode = true
+
+[memory]
+context_max_tokens = 128000
+context_save_interval_minutes = 60
+migration_hour = 0
+migration_minute = 0
+discard_md_after_migration = true
+embedding_model = "all-MiniLM-L6-v2"
+embedding_dimensions = 384
+max_search_results = 10
+
+[providers.openai]
+api_key = ""
+api_base = ""
+enabled = false
+
+[providers.anthropic]
+api_key = ""
+api_base = ""
+enabled = false
+
+[providers.openrouter]
+api_key = ""
+api_base = ""
+enabled = false
+
+[providers.nvidia]
+api_key = ""
+api_base = "https://integrate.api.nvidia.com/v1"
+enabled = false
+
+[providers.opencode]
+api_key = ""
+api_base = ""
+enabled = false
+
+[scheduler]
+heartbeat_interval_seconds = 60
+max_cron_jobs = 50
+
+[doctor]
+auto_repair = true
+snapshot_on_startup = true

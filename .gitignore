@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Config com credenciais (NUNCA commitar)
+openpy.toml
+
+# Dados runtime
+data/memory/daily/*.md
+data/agents/*
+data/media/**/*
+data/backups/*
+data/logs/*
+
+# Temporários
+/tmp/
+*.log
+*.pid
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tests locais
+tests/b*.py
+tests/wsl_run.sh
+tests/run_tests.sh
