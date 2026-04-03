@@ -1,11 +1,15 @@
 """
 Open-PY — Lifecycle Manager
 Controla startup, running e shutdown do sistema inteiro.
+v2.0: Versionamento de SOUL/ESSENCE, healthcheck
 """
 
 import asyncio
+import hashlib
+import shutil
 import signal
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -263,14 +267,17 @@ class OpenPY:
     # ============================================
 
     async def _load_identity(self):
-        """Carrega soul.md e essence.md"""
+        """Carrega soul.md e essence.md com versionamento automático"""
         data_dir = Path(self.config.core.install_dir) / "data"
+        versions_dir = data_dir / "identity_versions"
+        versions_dir.mkdir(parents=True, exist_ok=True)
 
         soul_path = data_dir / "soul.md"
         essence_path = data_dir / "essence.md"
 
         if soul_path.exists():
             self._soul = soul_path.read_text(encoding="utf-8")
+            self._backup_identity(soul_path, versions_dir, "soul")
             log.info("✅ soul.md carregado")
         else:
             self._soul = "Nenhuma memória permanente registrada ainda."
@@ -278,10 +285,77 @@ class OpenPY:
 
         if essence_path.exists():
             self._essence = essence_path.read_text(encoding="utf-8")
+            self._backup_identity(essence_path, versions_dir, "essence")
             log.info("✅ essence.md carregado")
         else:
             self._essence = "Você é o Open-PY, assistente autônomo. Responda em português brasileiro de forma direta e objetiva."
             log.warning("⚠️ essence.md não encontrado, usando default")
+
+    def _backup_identity(self, file_path: Path, versions_dir: Path, name: str):
+        """Faz backup versionado de soul/essence com hash de integridade"""
+        content = file_path.read_bytes()
+        content_hash = hashlib.sha256(content).hexdigest()[:12]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Verificar se já existe backup com mesmo hash (conteúdo idêntico)
+        existing = list(versions_dir.glob(f"{name}_*_{content_hash}.md"))
+        if existing:
+            return  # Já tem backup com este hash, não duplicar
+
+        backup_name = f"{name}_{timestamp}_{content_hash}.md"
+        backup_path = versions_dir / backup_name
+        shutil.copy2(file_path, backup_path)
+
+        # Manter últimas 20 versões
+        all_versions = sorted(versions_dir.glob(f"{name}_*.md"))
+        while len(all_versions) > 20:
+            oldest = all_versions.pop(0)
+            oldest.unlink()
+
+        log.info(f"📦 {name}.md backup criado",
+                 version=backup_name, hash=content_hash)
+
+    async def get_health_report(self) -> dict:
+        """Retorna relatório de saúde completo do sistema"""
+        report = {"status": "healthy", "components": {}}
+
+        # Database
+        if self.db_pool:
+            try:
+                await self.db_pool.fetchval("SELECT 1")
+                report["components"]["database"] = {"status": "up"}
+            except Exception as e:
+                report["status"] = "degraded"
+                report["components"]["database"] = {"status": "down", "error": str(e)}
+        else:
+            report["components"]["database"] = {"status": "not_configured"}
+
+        # LLM
+        report["components"]["llm"] = {
+            "status": "up" if self.llm_router else "not_configured"
+        }
+
+        # Memory
+        report["components"]["memory"] = {
+            "status": "up" if self.memory_manager else "not_configured"
+        }
+
+        # Agents
+        if self.orchestrator:
+            report["components"]["agents"] = self.orchestrator.get_health_report()
+        
+        # Telegram
+        report["components"]["telegram"] = {
+            "status": "up" if self.telegram_bot else "not_configured"
+        }
+
+        # Identity
+        report["components"]["identity"] = {
+            "soul_loaded": bool(self._soul and self._soul != "Nenhuma memória permanente registrada ainda."),
+            "essence_loaded": bool(self._essence),
+        }
+
+        return report
 
     async def _init_database(self):
         """Conecta ao PostgreSQL e executa migrations"""

@@ -101,6 +101,30 @@ class TelegramBot:
             )
             await message.reply(text)
 
+        @self.dp.message(Command("health"))
+        async def cmd_health(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            report = await self.core.get_health_report()
+            status_emoji = {"healthy": "🟢", "degraded": "🟡", "down": "🔴"}.get(
+                report.get("status", ""), "⚪"
+            )
+            text = f"{status_emoji} **Healthcheck Open-PY**\n\n"
+            for comp, info in report.get("components", {}).items():
+                if isinstance(info, dict) and "status" in info:
+                    emoji = {"up": "🟢", "down": "🔴", "not_configured": "⚪"}.get(
+                        info["status"], "🟡"
+                    )
+                    text += f"{emoji} **{comp}**: {info['status']}\n"
+                elif isinstance(info, dict):
+                    # Agent health report
+                    text += f"\n🤖 **Saúde dos Agentes:**\n"
+                    for agent_name, health in info.items():
+                        h_emoji = "🟢" if health.get("healthy") else "🔴"
+                        fails = health.get("failures", 0)
+                        text += f"  {h_emoji} {agent_name} — {fails} falhas\n"
+            await message.reply(text)
+
         @self.dp.message(Command("agents"))
         async def cmd_agents(message: types.Message):
             if not self._is_authorized(message.from_user.id):
@@ -325,6 +349,7 @@ class TelegramBot:
             BotCommand(command="start", description="Iniciar bot"),
             BotCommand(command="help", description="Ajuda"),
             BotCommand(command="status", description="Status do sistema"),
+            BotCommand(command="health", description="Healthcheck completo"),
             BotCommand(command="memory", description="Stats de memória"),
             BotCommand(command="agents", description="Listar agentes"),
             BotCommand(command="tasks", description="Tarefas ativas"),
