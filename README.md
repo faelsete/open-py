@@ -240,7 +240,7 @@ password = "auto_gerada"                      # Gerada na instalação
 
 [telegram]
 bot_token = "123456:ABC..."                   # Token do BotFather
-allowed_users = [1050410410]                  # IDs autorizados
+allowed_users = [123456789]                    # Seu Telegram User ID
 max_message_length = 4096
 polling_mode = true
 
