@@ -16,6 +16,8 @@ from shared.config import TelegramConfig
 from shared.logger import get_logger
 from core.rate_limiter import RateLimiter
 from core.audit_log import AuditLog
+from core.message_queue import MessageBatcher
+from core.auto_learner import AutoLearner
 
 log = get_logger("telegram")
 
@@ -52,6 +54,21 @@ class TelegramBot:
             log_dir=f"{core.config.core.install_dir}/data/audit"
             if hasattr(core, 'config') else "/opt/open-py/data/audit"
         )
+
+        # Message Batcher: espera 2s para agrupar msgs antes de processar
+        self.batcher = MessageBatcher(
+            process_callback=self._process_batched_message,
+            batch_window=2.0,
+        )
+
+        # Auto-Learner: salva tudo e aprende preferências
+        self.learner = AutoLearner(
+            memory_manager=core.memory_manager if hasattr(core, 'memory_manager') else None,
+            db_pool=core.db_pool if hasattr(core, 'db_pool') else None,
+        )
+
+        # Cache de messages para callback
+        self._pending_replies: dict[int, types.Message] = {}
 
         # Registrar handlers
         self._register_handlers()
@@ -279,15 +296,19 @@ class TelegramBot:
                 )
                 return
 
-            await message.chat.do("typing")
-            result = await self.core.process(
-                input_text=message.text,
-                input_type="text",
-                user_id=message.from_user.id,
+            # Guardar referência da mensagem para reply posterior
+            self._pending_replies[message.chat.id] = message
+
+            # Enviar ao batcher (agrupa msgs em janela de 2s)
+            await self.batcher.add_message(
+                chat_id=message.chat.id,
+                message={
+                    "text": message.text,
+                    "input_type": "text",
+                    "user_id": message.from_user.id,
+                    "attachments": [],
+                }
             )
-            response = result.get("response", "Sem resposta")
-            # Dividir se muito longo
-            await self._send_long_message(message, response)
 
         # === FOTOS ===
         @self.dp.message(F.photo)
@@ -352,6 +373,67 @@ class TelegramBot:
                 user_id=message.from_user.id,
             )
             await self._send_long_message(message, result.get("response", ""))
+
+    # ============================================
+    # BATCH PROCESSOR (chamado pelo MessageBatcher)
+    # ============================================
+
+    async def _process_batched_message(self, chat_id: int, msg_data: dict):
+        """
+        Processa mensagem (ou batch de mensagens) após janela de 2s.
+        Chamado pelo MessageBatcher quando não há mais msgs chegando.
+        """
+        message = self._pending_replies.get(chat_id)
+        if not message:
+            log.warning("⚠️ Sem mensagem de referência para reply", chat_id=chat_id)
+            return
+
+        try:
+            await message.chat.do("typing")
+
+            input_text = msg_data.get("text", "")
+            input_type = msg_data.get("input_type", "text")
+            user_id = msg_data.get("user_id", 0)
+            attachments = msg_data.get("attachments", [])
+
+            # Processar via Core
+            result = await self.core.process(
+                input_text=input_text,
+                input_type=input_type,
+                user_id=user_id,
+                attachments=attachments,
+            )
+
+            response = result.get("response", "Sem resposta")
+
+            # Auto-learning: salvar interação e extrair preferências
+            try:
+                await self.learner.learn_from_interaction(
+                    user_input=input_text,
+                    bot_response=response,
+                    user_id=user_id,
+                    input_type=input_type,
+                )
+            except Exception as e:
+                log.warning("⚠️ Erro no auto-learning", error=str(e))
+
+            # Enviar resposta
+            await self._send_long_message(message, response)
+
+            # Log de batch se aplicável
+            if msg_data.get("is_batch"):
+                log.info("📦 Batch processado",
+                         chat_id=chat_id,
+                         batch_size=msg_data.get("batch_size", 1))
+
+        except Exception as e:
+            log.error("❌ Erro processando batch", error=str(e))
+            try:
+                await message.reply("⚠️ Erro interno ao processar sua mensagem.")
+            except Exception:
+                pass
+        finally:
+            self._pending_replies.pop(chat_id, None)
 
     # ============================================
     # AUTH

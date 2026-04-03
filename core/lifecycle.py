@@ -185,7 +185,13 @@ class OpenPY:
                       user_id: int = None, target_agent: str = None) -> dict:
         """
         Ponto de entrada principal para processar qualquer input.
-        Chamado pelo Telegram handler ou por comandos internos.
+        
+        Fluxo:
+        1. Classificar input (4 camadas do brain)
+        2. Buscar memórias SEMANTICAMENTE relevantes (como um cérebro humano)
+        3. Injetar APENAS o contexto necessário no prompt
+        4. Delegar ou responder diretamente
+        5. Salvar interação na memória
         """
         from shared.models import InputType
 
@@ -214,20 +220,97 @@ class OpenPY:
 
         # Senão, Core responde diretamente via LLM
         if self.llm_router:
+            # === MEMÓRIA SEMÂNTICA ===
+            # Buscar APENAS memórias relevantes ao input atual
+            # Como um cérebro humano: perguntou sobre pão → só lembra de culinária
+            semantic_context = ""
+            if self.memory_manager:
+                semantic_context = await self._build_semantic_context(
+                    input_text, user_id
+                )
+
             system_prompt = build_core_system_prompt(self._soul, self._essence)
+
+            # Injetar contexto semântico no prompt (se houver)
+            if semantic_context:
+                system_prompt += f"\n\n{semantic_context}"
+
             response = await self.llm_router.complete(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": input_text},
                 ],
             )
-            # Salvar memória da interação
+
+            # Salvar interação na memória (auto-save de tudo)
             if self.memory_manager:
                 await self.memory_manager.buffer_interaction(input_text, response)
 
             return {"response": response, "status": "completed"}
 
         return {"response": "⚠️ Nenhum provedor LLM configurado. Use /config.", "status": "error"}
+
+    async def _build_semantic_context(self, query: str, user_id: int = None,
+                                       max_tokens: int = 2000) -> str:
+        """
+        Busca semântica de memórias relevantes ao input atual.
+        
+        Funciona como um cérebro humano:
+        - Se perguntou sobre "Python" → busca memórias de programação
+        - Se perguntou sobre "jantar" → busca memórias de culinária
+        - NUNCA carrega 1M de tokens — só o necessário
+        
+        Budget máximo: ~2000 tokens (≈8000 chars)
+        """
+        context_parts = []
+        char_budget = max_tokens * 4  # ~4 chars por token
+        chars_used = 0
+
+        try:
+            # 1. Busca híbrida: keyword + semântica (pgvector)
+            results = await self.memory_manager.search(
+                query, mode="hybrid", limit=8
+            )
+
+            if results:
+                context_parts.append("## Memórias relevantes (recuperação semântica)")
+                for mem in results:
+                    content = mem.get("content", "")
+                    # Truncar individual se muito longo
+                    if len(content) > 300:
+                        content = content[:300] + "..."
+                    
+                    # Verificar budget
+                    if chars_used + len(content) > char_budget:
+                        break
+                    
+                    chars_used += len(content)
+                    tags = mem.get("tags", [])
+                    tag_str = f" [{', '.join(tags[:3])}]" if tags else ""
+                    context_parts.append(f"- {content}{tag_str}")
+
+            # 2. Buscar preferências do usuário (sempre úteis)
+            if user_id and chars_used < char_budget * 0.7:
+                prefs = await self.memory_manager.search(
+                    f"PREFERÊNCIA user:{user_id}",
+                    mode="keyword", limit=5
+                )
+                if prefs:
+                    context_parts.append("\n## Preferências do usuário")
+                    for pref in prefs:
+                        content = pref.get("content", "")[:150]
+                        if chars_used + len(content) > char_budget:
+                            break
+                        chars_used += len(content)
+                        context_parts.append(f"- {content}")
+
+        except Exception as e:
+            log.warning("⚠️ Erro buscando memória semântica", error=str(e))
+
+        if not context_parts:
+            return ""
+
+        return "\n".join(context_parts)
 
     # ============================================
     # SYSTEM STATUS

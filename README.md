@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL-3.0"></a>
-  <img src="https://img.shields.io/badge/version-2.2.0-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-3.0.0-green.svg" alt="Version">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/platform-Ubuntu%2022.04%2B-orange.svg" alt="Platform">
   <img src="https://img.shields.io/badge/PostgreSQL-16%2B-336791.svg" alt="PostgreSQL">
@@ -60,13 +60,17 @@ Open-PY é um framework autônomo que orquestra múltiplos agentes de IA especia
 |---------|-----------|
 | 🧠 **Thinking Engine** | Motor de raciocínio em 4 camadas (Captura → Roteamento → Execução → Resposta) |
 | 🤖 **6 Agentes Builtin** | vision, builder, cleaner, researcher, transcriber, agent_creator |
-| 💾 **Memória em 3 Camadas** | Contexto (RAM) → Memory.md (filesystem) → PostgreSQL (longo prazo) |
-| 🔐 **Isolamento Seguro** | Bubblewrap (bwrap) para sandboxing de agentes sem peso do Docker |
-| 📱 **Frontend Telegram** | Interface completa com 10+ comandos e suporte a mídias |
+| 💾 **Memória Semântica** | Busca contextual (pgvector): só lembra o relevante, como um cérebro humano |
+| 📦 **Message Batching** | Agrupa mensagens em janela de 2s antes de processar — nunca responde fragmentado |
+| 📋 **Task Queue** | Fila obrigatória com prioridade (CRITICAL > HIGH > NORMAL > LOW) |
+| 🛡️ **Rate Limiter** | Token bucket: 1 msg/s per-chat, 20 msg/s global, deduplicação |
+| 📝 **Audit Log Imutável** | Chain SHA-256 (blockchain-style), append-only, verificação de integridade |
+| 🧠 **Auto-Learning** | Salva TUDO automaticamente, extrai e lembra preferências do usuário |
+| 🔐 **SYSTEM_SECURITY** | Bloco de segurança injetado em toda delegação — nunca truncado |
 | 🔄 **Multi-Provedor LLM** | OpenAI, Anthropic, OpenRouter, NVIDIA NIM, Custom (com fallback automático) |
 | 🩺 **Auto-Diagnóstico** | 14 checks de saúde + reparo automático via `/doctor` |
 | ⏰ **Scheduler** | Heartbeat, migração diária de memórias, cron jobs |
-| 🧬 **Identidade Persistente** | soul.md (memória inalterável) + essence.md (personalidade) |
+| 🧬 **Identidade Persistente** | soul.md (memória inalterável) + essence.md (personalidade) com versionamento SHA-256 |
 
 ---
 
@@ -117,14 +121,19 @@ Open-PY é um framework autônomo que orquestra múltiplos agentes de IA especia
 ### Fluxo de um pedido
 
 ```
-1. Usuário envia mensagem no Telegram
-2. Bot recebe e encaminha ao Core
-3. Core classifica o tipo (text/image/audio/video/code/command)
-4. Core avalia urgência (critical/high/normal/low)
-5. Core decide: responder direto OU delegar para agente
-6. Se delegado → agente executa com suas ferramentas permitidas
-7. Resultado volta ao Core → formata → envia ao Telegram
-8. Interação é salva no buffer de memória
+1. Usuário envia mensagem(s) no Telegram
+2. Rate limiter verifica flood + deduplicação
+3. Batcher coleta mensagens (janela de 2s)
+4. Se recebeu 5 msgs → une em 1 input: "Leia TODAS antes de responder"
+5. Core classifica o tipo (text/image/audio/video/code/command)
+6. Core avalia urgência (critical/high/normal/low)
+7. Memória semântica: busca APENAS memórias relevantes ao input atual
+   (perguntou sobre Python? → só lembra de programação, não de culinária)
+8. Core decide: responder direto OU delegar para agente
+9. Se delegado → SYSTEM_SECURITY injetado + agente executa
+10. Resultado volta ao Core → formata → envia ao Telegram
+11. Auto-learner salva interação + extrai preferências
+12. Audit log registra ações críticas com hash SHA-256
 ```
 
 ---
@@ -316,13 +325,15 @@ Para editar: `openpy config`
 | `/start` | Iniciar o bot | — |
 | `/help` | Lista completa de comandos | — |
 | `/status` | Status do sistema (RAM, disco, DB, LLM) | — |
+| `/health` | Relatório completo de saúde (DB, LLM, Memória, Agentes) | — |
 | `/memory` | Estatísticas de memória | — |
 | `/agents` | Listar agentes ativos | — |
 | `/tasks` | Tarefas em andamento | — |
 | `/remember <texto>` | Salvar memória manualmente | `/remember Meu IP é 192.168.1.1` |
-| `/recall <busca>` | Buscar nas memórias | `/recall qual meu IP` |
+| `/recall <busca>` | Buscar nas memórias (semântica) | `/recall qual meu IP` |
 | `/soul` | Ver memória permanente | — |
 | `/essence` | Ver personalidade atual | — |
+| `/audit` | Verificar integridade do audit log | — |
 
 ### Mensagens livres
 
@@ -393,10 +404,62 @@ O `agent_creator` vai gerar o agente com as permissões solicitadas.
 └──────────────────────────────────────────────────────────────┘
 ```
 
+### Busca Semântica Contextual (como um cérebro humano)
+
+O Open-PY **não carrega 1M de tokens** a cada pergunta. Ele funciona como um cérebro humano:
+
+```
+Pergunta: "Como instalar o Django?"
+ → Busca semântica retorna: memórias sobre Python, pip, projetos web
+ → NÃO retorna: memórias sobre culinária, carros, ou amor
+
+Pergunta: "Qual era aquele servidor que configuramos?"
+ → Busca: memórias com IPs, servidores, config
+ → NÃO retorna: memórias sobre código Python
+```
+
+**Budget**: máximo ~2000 tokens (≈8000 chars) injetados por consulta.
+
+### Auto-Learning
+
+O sistema aprende automaticamente a cada interação:
+
+| O que detecta | Como salva | Importância |
+|---------------|-----------|:-----------:|
+| "Prefiro usar TypeScript" | Tag: preferência/positive | ⭐⭐⭐⭐ (8) |
+| "Nunca use var em JS" | Tag: preferência/negative | ⭐⭐⭐⭐ (8) |
+| "Perfeito, é isso!" | Tag: feedback/positive | ⭐⭐⭐ (7) |
+| "Tá errado, refaça" | Tag: feedback/negative | ⭐⭐⭐ (7) |
+| Resumo de sessão | Tag: resumo/auto-aprendido | ⭐⭐ (4) |
+
 ### Tags automáticas
 
 O sistema extrai tags automaticamente baseado em palavras-chave:
 - `python`, `javascript`, `api`, `database`, `docker`, `git`, `linux`, `nginx`, etc.
+
+---
+
+## 📦 Message Batching & Task Queue
+
+### Message Batching
+
+Se você enviar 10 mensagens seguidas, o bot **NÃO** responde 10 vezes. Ele:
+
+1. Coleta todas as mensagens em uma janela de 2 segundos
+2. Concatena em um input único: `[Mensagem 1]: ... [Mensagem 2]: ...`
+3. Adiciona header: "O usuário enviou N mensagens. Leia TODAS antes de responder"
+4. Processa uma vez só → resposta unificada e coerente
+
+### Task Queue (Fila Obrigatória)
+
+Toda tarefa entra em uma fila com prioridade:
+
+| Prioridade | Quando | Exemplos |
+|:----------:|--------|----------|
+| 🔴 CRITICAL | "urgente", "caiu", "fora do ar" | Servidor down, erro em produção |
+| 🟡 HIGH | "rápido", "logo" | Bug report, deploy |
+| 🟢 NORMAL | Padrão | Perguntas, tarefas |
+| ⚪ LOW | Automações, background | Limpeza, backups |
 
 ---
 
@@ -516,8 +579,12 @@ O comando `openpy doctor` executa **14 verificações**:
 ├── core/                     # 🧠 Cérebro do sistema
 │   ├── __init__.py
 │   ├── brain.py              # Thinking Engine (4 camadas)
-│   ├── orchestrator.py       # Delegação e monitoramento de tarefas
-│   └── lifecycle.py          # Startup (10 passos) / Shutdown
+│   ├── orchestrator.py       # Delegação, fallback, healthcheck, quotas
+│   ├── lifecycle.py          # Startup / Shutdown + memória semântica
+│   ├── audit_log.py          # 📝 Log imutável com chain SHA-256
+│   ├── rate_limiter.py       # 🛡️ Token bucket (per-chat + global)
+│   ├── message_queue.py      # 📦 Message batcher + task queue
+│   └── auto_learner.py       # 🧠 Auto-learning de preferências
 │
 ├── memory/                   # 💾 Sistema de memória
 │   ├── __init__.py
@@ -581,12 +648,43 @@ O comando `openpy doctor` executa **14 verificações**:
 | Medida | Descrição |
 |--------|-----------|
 | **Telegram allowlist** | Apenas IDs em `allowed_users` podem usar o bot |
+| **Rate Limiter** | Token bucket: 1 msg/s per-chat, 20 msg/s global, deduplicação em 1s |
+| **SYSTEM_SECURITY Block** | Regras de segurança injetadas verbatim em toda delegação — NUNCA truncadas |
+| **Audit Log Imutável** | Chain SHA-256: cada entrada referencia o hash da anterior (blockchain-style) |
+| **Context Compression Segura** | Preserva início+fim do input, nunca corta regras de segurança |
+| **Identity Versioning** | soul.md e essence.md versionados com SHA-256 — detecta adulteração |
 | **Bubblewrap sandbox** | Agentes rodam isolados via Linux namespaces |
 | **Permissões mínimas** | Cada agente tem apenas as ferramentas que precisa |
 | **Config protegido** | `openpy.toml` tem permissão `600` (só root lê) |
 | **Senha auto-gerada** | Senha do PostgreSQL gerada com `openssl rand` |
 | **Shell timeout** | Comandos shell têm timeout de 30s por padrão |
-| **Sem Docker** | Isolamento via bwrap — mais leve e direto no Linux |
+| **Agent Quotas** | Máx 20 agentes, 5 criações/hora, 10 custom |
+| **Fallback Routing** | Se agente falha, tenta próximo automaticamente |
+| **Healthcheck** | Auto-desativação após 3 falhas, auto-recovery após 5min |
+
+### Audit Log
+
+```
+/opt/open-py/data/audit/
+├── audit_2026-04-03.jsonl    ← Append-only, um por dia
+├── audit_2026-04-02.jsonl
+└── ...
+```
+
+Cada entrada:
+```json
+{
+  "ts": "2026-04-03T17:40:00Z",
+  "actor": "user:1050410410",
+  "action": "shell_exec",
+  "target": "ls -la /tmp",
+  "severity": "critical",
+  "payload_hash": "a1b2c3d4e5f6",
+  "prev_hash": "f6e5d4c3b2a1..."
+}
+```
+
+Verificar integridade: `/audit` no Telegram
 
 ---
 
@@ -675,19 +773,26 @@ pgvector>=0.2         # pgvector Python client
 
 ## 📋 Changelog
 
-### v2.2.0 (Atual)
+### v3.0.0 (Atual) — "Hardened Brain"
+- 🧠 **Memória Semântica**: busca contextual (pgvector) — só injeta memórias relevantes ao input atual
+- 📦 **Message Batching**: agrupa mensagens em janela de 2s antes de processar
+- 📋 **Task Queue**: fila obrigatória com prioridade (CRITICAL > HIGH > NORMAL > LOW)
+- 🛡️ **Rate Limiter**: token bucket (1 msg/s, 20 msg/s global) + deduplicação
+- 📝 **Audit Log Imutável**: chain SHA-256, append-only, comando `/audit`
+- 🧠 **Auto-Learning**: salva tudo, extrai preferências, adapta comportamento
+- 🔐 **SYSTEM_SECURITY Block**: regras de segurança nunca truncadas/comprimidas
+- 🔐 **Context Compression Segura**: preserva início+fim, corta só histórico antigo
+- 🔐 **Identity Versioning**: backup SHA-256 de soul.md e essence.md
+- 🏥 **Fallback Routing**: cadeia automática de delegação se agente falha
+- 💊 **Agent Healthcheck**: auto-desativação após 3 falhas, recovery após 5min
+- 🚫 **Agent Quotas**: max 20 agentes, 5/hora, 10 custom
+- 🏥 **Comando /health**: relatório completo de saúde via Telegram
+
+### v2.2.0
 - 🐍 Logo oficial do Open-PY
-- 🔒 Licença migrada para AGPL-3.0 (proteção contra uso comercial fechado)
+- 🔒 Licença migrada para AGPL-3.0
 - 🔗 Base URLs pré-configuradas para todos os provedores
 - 📦 pgvector com 3 fallbacks (apt → PGDG → compilação)
-- 🔧 Service ExecStart corrigido para __main__.py
-- 📝 API keys e tokens visíveis durante digitação
-- 👥 Templates de Issue, PR, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY
-
-### v2.1.0
-- 🐛 Fix: leitura de input via pipe (curl | bash → /dev/tty)
-- 🐛 Fix: PostgreSQL retry com pg_isready
-- 🐛 Fix: headers do servidor para compilação pgvector
 
 ### v2.0.0
 - 🧠 Thinking Engine com 4 camadas
