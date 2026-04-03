@@ -501,42 +501,97 @@ ok "Modelo padrão: $DEFAULT_MODEL"
 [[ -n "${FALLBACK_MODEL:-}" ]] && ok "Fallback: $FALLBACK_MODEL"
 
 # ═══════════════════════════════════════════════════════════
-# [6/8] TELEGRAM (Interativo via /dev/tty)
+# [6/8] TELEGRAM (Auto-detecção via API)
 # ═══════════════════════════════════════════════════════════
 header "[6/8] Telegram Bot"
 
 echo -e "  Como criar seu bot:"
 echo -e "    1. Abra o Telegram → procure ${CYAN}@BotFather${NC}"
 echo -e "    2. Envie ${CYAN}/newbot${NC} → siga as instruções"
-echo -e "    3. Copie o token"
-echo ""
-echo -e "  Para seu User ID: envie ${CYAN}/start${NC} para ${CYAN}@userinfobot${NC}"
+echo -e "    3. Copie o token e cole abaixo"
 echo ""
 echo -ne "  ${BOLD}Token do Bot: ${NC}"
 safe_read BOT_TOKEN
-echo -ne "  ${BOLD}Seu Telegram User ID: ${NC}"
-safe_read TELEGRAM_USER_ID
 
-# Validar token
+TELEGRAM_USER_ID="0"
+BOT_USERNAME=""
+
 if [[ -n "$BOT_TOKEN" ]]; then
-    BOT_TEST=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || echo '{}')
-    if echo "$BOT_TEST" | grep -q '"ok":true'; then
-        BOT_NAME=$(echo "$BOT_TEST" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['username'])" 2>/dev/null || echo "?")
-        ok "Bot validado: @$BOT_NAME"
+    # === Validar token com getMe ===
+    step "Validando token..."
+    BOT_TEST=$(curl -s --max-time 10 "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || echo '{}')
+
+    if echo "$BOT_TEST" | jq -e '.ok' 2>/dev/null | grep -q 'true'; then
+        BOT_USERNAME=$(echo "$BOT_TEST" | jq -r '.result.username' 2>/dev/null)
+        BOT_FIRSTNAME=$(echo "$BOT_TEST" | jq -r '.result.first_name' 2>/dev/null)
+        ok "Bot validado: @${BOT_USERNAME} (${BOT_FIRSTNAME})"
+
+        # === Auto-captura do User ID ===
+        echo ""
+        echo -e "  ${BOLD}🔗 Detecção automática do seu User ID:${NC}"
+        echo ""
+        echo -e "    1. Abra o Telegram"
+        echo -e "    2. Procure ${CYAN}@${BOT_USERNAME}${NC}"
+        echo -e "    3. Envie ${CYAN}/start${NC} para o bot"
+        echo ""
+        echo -e "  ${DIM}⏳ Aguardando sua mensagem... (máx 90 segundos)${NC}"
+
+        # Limpar updates antigos para não pegar lixo
+        curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=-1" >/dev/null 2>&1
+        sleep 1
+
+        # Pegar offset atual para ignorar mensagens antigas
+        LAST_UPDATE=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=-1" 2>/dev/null)
+        CURRENT_OFFSET=0
+        if echo "$LAST_UPDATE" | jq -e '.result[0].update_id' &>/dev/null; then
+            CURRENT_OFFSET=$(( $(echo "$LAST_UPDATE" | jq -r '.result[0].update_id') + 1 ))
+        fi
+
+        # Poll por novas mensagens (máx 90s)
+        DETECTED=false
+        for attempt in $(seq 1 18); do
+            UPDATES=$(curl -s --max-time 6 \
+                "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${CURRENT_OFFSET}&timeout=5" \
+                2>/dev/null || echo '{}')
+
+            # Verificar se tem algum update com message.from.id
+            USER_ID_FOUND=$(echo "$UPDATES" | jq -r '.result[0].message.from.id // empty' 2>/dev/null)
+
+            if [[ -n "$USER_ID_FOUND" ]] && [[ "$USER_ID_FOUND" != "null" ]]; then
+                TELEGRAM_USER_ID="$USER_ID_FOUND"
+                USER_NAME=$(echo "$UPDATES" | jq -r '.result[0].message.from.first_name // "Usuário"' 2>/dev/null)
+                DETECTED=true
+                # Confirmar offset para limpar
+                NEW_OFFSET=$(( $(echo "$UPDATES" | jq -r '.result[0].update_id') + 1 ))
+                curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${NEW_OFFSET}" >/dev/null 2>&1
+                break
+            fi
+        done
+
+        if $DETECTED; then
+            ok "User ID detectado: ${TELEGRAM_USER_ID} (${USER_NAME})"
+            # Enviar mensagem de confirmação no bot
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                -d "chat_id=${TELEGRAM_USER_ID}" \
+                -d "text=✅ Open-PY conectado! Seu User ID (${TELEGRAM_USER_ID}) foi registrado automaticamente." \
+                -d "parse_mode=Markdown" >/dev/null 2>&1
+        else
+            warn "Timeout — não recebi mensagem no bot"
+            echo -ne "  ${CYAN}Digite seu User ID manualmente (use @userinfobot): ${NC}"
+            safe_read TELEGRAM_USER_ID
+            if [[ ! "$TELEGRAM_USER_ID" =~ ^[0-9]+$ ]]; then
+                warn "User ID inválido — configure depois com: openpy config"
+                TELEGRAM_USER_ID="0"
+            fi
+        fi
     else
-        warn "Token não validado — verifique depois com: openpy config"
+        warn "Token inválido — verifique e configure depois com: openpy config"
     fi
 else
     warn "Token vazio — configure depois com: openpy config"
 fi
 
-# Validar User ID
-if [[ -n "$TELEGRAM_USER_ID" ]] && [[ "$TELEGRAM_USER_ID" =~ ^[0-9]+$ ]]; then
-    ok "User ID: $TELEGRAM_USER_ID"
-else
-    warn "User ID inválido ou vazio — configure depois com: openpy config"
-    TELEGRAM_USER_ID="0"
-fi
+[[ "$TELEGRAM_USER_ID" != "0" ]] && ok "User ID: $TELEGRAM_USER_ID"
 
 # ═══════════════════════════════════════════════════════════
 # [7/8] GERAR CONFIG + MIGRATIONS
