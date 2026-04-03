@@ -317,12 +317,103 @@ ok "$PKG_COUNT pacotes instalados"
 # ═══════════════════════════════════════════════════════════
 header "[5/8] Provedores LLM"
 
+# ─── Função: buscar modelos disponíveis da API ───
+fetch_models() {
+    local api_key="$1"
+    local base_url="$2"
+    local provider="$3"  # openai|anthropic|openrouter|nvidia|custom
+    local auth_header models_json
+
+    # Anthropic usa x-api-key, todos os outros usam Bearer
+    if [[ "$provider" == "anthropic" ]]; then
+        models_json=$(curl -s --max-time 10 \
+            -H "x-api-key: $api_key" \
+            -H "anthropic-version: 2023-06-01" \
+            "${base_url}/v1/models" 2>/dev/null)
+    else
+        models_json=$(curl -s --max-time 10 \
+            -H "Authorization: Bearer $api_key" \
+            "${base_url}/models" 2>/dev/null)
+    fi
+
+    # Extrair IDs dos modelos
+    if [[ -n "$models_json" ]] && echo "$models_json" | jq -e '.data' &>/dev/null; then
+        echo "$models_json" | jq -r '.data[].id' 2>/dev/null | sort
+    else
+        echo ""
+    fi
+}
+
+# ─── Função: selecionar modelo com lista numerada ───
+select_model() {
+    local api_key="$1"
+    local base_url="$2"
+    local provider="$3"
+    local prompt_label="$4"  # ex: "padrão" ou "fallback"
+    local result_var="$5"
+
+    step "Buscando modelos disponíveis..."
+    local raw_models
+    raw_models=$(fetch_models "$api_key" "$base_url" "$provider")
+
+    if [[ -z "$raw_models" ]]; then
+        warn "Não foi possível listar modelos da API"
+        echo -ne "  ${CYAN}Digite o nome do modelo ${prompt_label}: ${NC}"
+        safe_read _typed_model
+        eval "$result_var=\"\$_typed_model\""
+        return
+    fi
+
+    # Converter em array
+    local model_array=()
+    while IFS= read -r m; do
+        [[ -n "$m" ]] && model_array+=("$m")
+    done <<< "$raw_models"
+
+    local total=${#model_array[@]}
+    if [[ "$total" -eq 0 ]]; then
+        warn "Nenhum modelo encontrado"
+        echo -ne "  ${CYAN}Digite o nome do modelo ${prompt_label}: ${NC}"
+        safe_read _typed_model
+        eval "$result_var=\"\$_typed_model\""
+        return
+    fi
+
+    # Mostrar lista (máx 40 por página)
+    local show_max=40
+    echo ""
+    echo -e "  ${BOLD}📋 Modelos disponíveis (${total} encontrados):${NC}"
+    echo ""
+
+    local i=1
+    for m in "${model_array[@]}"; do
+        if [[ $i -le $show_max ]]; then
+            printf "    ${CYAN}%3d${NC} — %s\n" "$i" "$m"
+        fi
+        ((i++))
+    done
+
+    if [[ "$total" -gt "$show_max" ]]; then
+        echo -e "    ${DIM}... e mais $((total - show_max)) modelos (digite o nome para escolher outro)${NC}"
+    fi
+
+    echo ""
+    echo -ne "  ${BOLD}Escolha o número ou digite o nome do modelo ${prompt_label}: ${NC}"
+    safe_read _choice
+
+    if [[ "$_choice" =~ ^[0-9]+$ ]] && [[ "$_choice" -ge 1 ]] && [[ "$_choice" -le "$total" ]]; then
+        eval "$result_var=\"${model_array[$((_choice-1))]}\""
+    else
+        eval "$result_var=\"\$_choice\""
+    fi
+}
+
 echo -e "  Selecione os provedores de IA:"
 echo ""
-echo -e "    ${BOLD}1${NC} — OpenAI        ${DIM}(GPT-4o, GPT-4o-mini)${NC}"
-echo -e "    ${BOLD}2${NC} — Anthropic     ${DIM}(Claude Sonnet, Opus, Haiku)${NC}"
-echo -e "    ${BOLD}3${NC} — OpenRouter    ${DIM}(Todos os modelos ⭐)${NC}"
-echo -e "    ${BOLD}4${NC} — NVIDIA NIM    ${DIM}(Llama, Gemma, Qwen — URL já configurada)${NC}"
+echo -e "    ${BOLD}1${NC} — OpenAI        ${DIM}(GPT-4o, GPT-4o-mini, ...)${NC}"
+echo -e "    ${BOLD}2${NC} — Anthropic     ${DIM}(Claude Sonnet, Opus, Haiku, ...)${NC}"
+echo -e "    ${BOLD}3${NC} — OpenRouter    ${DIM}(Centenas de modelos ⭐)${NC}"
+echo -e "    ${BOLD}4${NC} — NVIDIA NIM    ${DIM}(Llama, Gemma, Qwen, ...)${NC}"
 echo -e "    ${BOLD}5${NC} — Custom        ${DIM}(Endpoint OpenAI-compatível)${NC}"
 echo ""
 echo -ne "  ${BOLD}Provedores (ex: 1,3 ou 4): ${NC}"
@@ -347,7 +438,7 @@ for p in "${PROVIDERS[@]}"; do
             safe_read OA_BASE
             [[ -n "$OA_BASE" ]] && OPENAI_BASE="$OA_BASE"
             OPENAI_ENABLED=true
-            [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="gpt-4o-mini"
+            select_model "$OPENAI_KEY" "$OPENAI_BASE" "openai" "padrão" DEFAULT_MODEL
             ok "OpenAI ativado → $OPENAI_BASE"
             ;;
         2)
@@ -358,7 +449,7 @@ for p in "${PROVIDERS[@]}"; do
             safe_read AN_BASE
             [[ -n "$AN_BASE" ]] && ANTHROPIC_BASE="$AN_BASE"
             ANTHROPIC_ENABLED=true
-            [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="claude-sonnet-4-20250514"
+            select_model "$ANTHROPIC_KEY" "$ANTHROPIC_BASE" "anthropic" "padrão" DEFAULT_MODEL
             ok "Anthropic ativado → $ANTHROPIC_BASE"
             ;;
         3)
@@ -369,7 +460,7 @@ for p in "${PROVIDERS[@]}"; do
             safe_read OR_BASE
             [[ -n "$OR_BASE" ]] && OPENROUTER_BASE="$OR_BASE"
             OPENROUTER_ENABLED=true
-            [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="anthropic/claude-sonnet-4"
+            select_model "$OPENROUTER_KEY" "$OPENROUTER_BASE" "openrouter" "padrão" DEFAULT_MODEL
             ok "OpenRouter ativado → $OPENROUTER_BASE"
             ;;
         4)
@@ -380,13 +471,8 @@ for p in "${PROVIDERS[@]}"; do
             echo -ne "  ${CYAN}Base URL (Enter = https://integrate.api.nvidia.com/v1): ${NC}"
             safe_read NV_BASE
             [[ -n "$NV_BASE" ]] && NVIDIA_BASE="$NV_BASE"
-            echo -ne "  ${CYAN}Modelo padrão (Enter = meta/llama-3.1-405b-instruct): ${NC}"
-            safe_read NV_MODEL
-            echo -ne "  ${CYAN}Modelo fallback (Enter = pular): ${NC}"
-            safe_read NV_FALLBACK
             NVIDIA_ENABLED=true
-            [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="${NV_MODEL:-meta/llama-3.1-405b-instruct}"
-            [[ -n "${NV_FALLBACK:-}" ]] && FALLBACK_MODEL="$NV_FALLBACK"
+            select_model "$NVIDIA_KEY" "$NVIDIA_BASE" "nvidia" "padrão" DEFAULT_MODEL
             ok "NVIDIA NIM ativado → $NVIDIA_BASE"
             ;;
         5)
@@ -395,15 +481,20 @@ for p in "${PROVIDERS[@]}"; do
             safe_read OPENCODE_BASE
             echo -ne "  ${CYAN}API Key: ${NC}"
             safe_read OPENCODE_KEY
-            echo -ne "  ${CYAN}Nome do modelo: ${NC}"
-            safe_read CUSTOM_MODEL
             OPENCODE_ENABLED=true
-            [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="${CUSTOM_MODEL:-custom}"
+            select_model "$OPENCODE_KEY" "$OPENCODE_BASE" "custom" "padrão" DEFAULT_MODEL
             ok "Custom ativado → $OPENCODE_BASE"
             ;;
         *) warn "Opção '$p' ignorada" ;;
     esac
 done
+
+# Fallback (opcional)
+if [[ -n "$DEFAULT_MODEL" ]]; then
+    echo ""
+    echo -ne "  ${CYAN}Modelo fallback (Enter = pular): ${NC}"
+    safe_read FALLBACK_MODEL
+fi
 
 [[ -z "$DEFAULT_MODEL" ]] && { warn "Nenhum provedor configurado"; DEFAULT_MODEL="gpt-4o-mini"; }
 ok "Modelo padrão: $DEFAULT_MODEL"
