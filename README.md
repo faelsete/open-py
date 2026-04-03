@@ -133,7 +133,7 @@ Open-PY é um framework autônomo que orquestra múltiplos agentes de IA especia
 | Software | Versão | Instalado automaticamente? |
 |----------|--------|---------------------------|
 | **Linux** | Ubuntu 22.04+ / Debian 12+ | ❌ (pré-requisito) |
-| **Python** | 3.11+ | ✅ Sim |
+| **Python** | 3.10+ | ✅ Sim |
 | **PostgreSQL** | 14+ | ✅ Sim |
 | **pgvector** | 0.5+ | ✅ Sim |
 | **Bubblewrap** | 0.8+ | ✅ Sim |
@@ -187,21 +187,23 @@ openpy update
 ```
 [1/8] Dependências do Sistema
      → Instala python3, postgresql, bwrap, ffmpeg, git
+     → Instala pgvector (apt → PGDG repo → compilação)
 
-[2/8] Estrutura de Diretórios
-     → Cria 11 diretórios em /opt/open-py/
+[2/8] Baixando Open-PY
+     → Clona repositório em /opt/open-py
+     → Cria 11 diretórios de dados
 
 [3/8] PostgreSQL
      → Cria user openpy, database openpy, extensões pgvector + pg_trgm
      → Gera senha segura automaticamente
 
 [4/8] Ambiente Python
-     → Cria venv isolado, instala 30+ dependências
+     → Cria venv isolado, instala 100+ dependências
 
 [5/8] Provedores LLM (menu interativo)
      → Pergunta quais provedores usar (1-5)
-     → Pede API keys de cada um selecionado
-     → Modelo NVIDIA é configurável
+     → Pede API key + Base URL de cada um
+     → URLs padrão pré-configuradas (NVIDIA, OpenAI, etc.)
 
 [6/8] Telegram Bot (menu interativo)
      → Pede token do bot + seu User ID
@@ -225,11 +227,12 @@ openpy update
 ```toml
 [core]
 name = "Open-PY"
-version = "2.0.0"
+version = "2.2.0"
 language = "pt-BR"
-default_model = "anthropic/claude-sonnet-4"  # Modelo padrão
-max_concurrent_agents = 10                    # Máx agentes simultâneos
-thinking_layers = 4                           # Camadas de raciocínio
+default_model = "meta/llama-3.1-405b-instruct"  # Modelo padrão
+fallback_model = ""                              # Modelo de fallback
+max_concurrent_agents = 10                       # Máx agentes simultâneos
+thinking_layers = 4                              # Camadas de raciocínio
 
 [database]
 host = "localhost"
@@ -256,19 +259,22 @@ max_search_results = 10
 
 [providers.openai]
 api_key = ""
+api_base = "https://api.openai.com/v1"        # URL pré-configurada
 enabled = false
 
 [providers.anthropic]
 api_key = ""
+api_base = "https://api.anthropic.com"        # URL pré-configurada
 enabled = false
 
 [providers.openrouter]
 api_key = "sk-or-..."
+api_base = "https://openrouter.ai/api/v1"     # URL pré-configurada
 enabled = true
 
 [providers.nvidia]
 api_key = "nvapi-..."
-api_base = "https://integrate.api.nvidia.com/v1"
+api_base = "https://integrate.api.nvidia.com/v1"  # NÃO coloque /chat/completions
 enabled = true
 
 [providers.opencode]                          # Endpoint customizado

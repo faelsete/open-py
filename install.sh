@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════
-# Open-PY — Instalador v2.1 (Bulletproof Edition)
+# Open-PY — Instalador v2.2 (Production Edition)
 # Framework de Agentes Autônomos para Linux
 #
 # Instalação:
@@ -17,7 +17,7 @@ VENV_DIR="$INSTALL_DIR/venv"
 DATA_DIR="$INSTALL_DIR/data"
 CONFIG_FILE="$INSTALL_DIR/openpy.toml"
 LOG_FILE="/var/log/open-py-install.log"
-VERSION="2.1.0"
+VERSION="2.2.0"
 ERRORS=0
 
 # ════════════════ CORES ════════════════
@@ -75,7 +75,7 @@ echo ""
 
 # Verifica se /dev/tty é acessível (necessário para input interativo)
 if ! exec 3< /dev/tty 2>/dev/null; then
-    die "Sem acesso ao terminal (/dev/tty). Execute manualmente: bash install.sh"
+    die "Sem acesso ao terminal (/dev/tty). Execute: bash <(curl -fsSL URL)"
 fi
 exec 3<&-
 
@@ -118,54 +118,67 @@ for pkg in "${PACKAGES[@]}"; do
     fi
 done
 
-# pgvector — precisa de headers do servidor para compilar
+# ────────────────── PGVECTOR ──────────────────
+# Detectar versão do PostgreSQL
 PG_VERSION=$(pg_config --version 2>/dev/null | grep -oP '\d+' | head -1 || echo "14")
+PGVECTOR_INSTALLED=false
 
-# Instalar headers do servidor (necessário para compilação de extensões)
+# Instalar headers do servidor PostgreSQL (necessário para compilar extensões)
 if ! dpkg -s "postgresql-server-dev-${PG_VERSION}" &>/dev/null 2>&1; then
-    step "Instalando headers do PostgreSQL $PG_VERSION..."
+    step "Instalando headers do PostgreSQL ${PG_VERSION}..."
     apt-get install -y -qq "postgresql-server-dev-${PG_VERSION}" >> "$LOG_FILE" 2>&1 || {
-        # Tenta pacote genérico
         apt-get install -y -qq "postgresql-server-dev-all" >> "$LOG_FILE" 2>&1 || true
     }
 fi
 
-if ! dpkg -s "postgresql-${PG_VERSION}-pgvector" &>/dev/null 2>&1; then
+if dpkg -s "postgresql-${PG_VERSION}-pgvector" &>/dev/null 2>&1; then
+    ok "pgvector (já instalado)"
+    PGVECTOR_INSTALLED=true
+else
     step "Instalando pgvector..."
 
-    # Método 1: Tentar via PGDG repo (mais confiável)
-    if ! apt-get install -y -qq "postgresql-${PG_VERSION}-pgvector" >> "$LOG_FILE" 2>&1; then
-        # Método 2: Adicionar PGDG repo e tentar de novo
+    # Método 1: apt direto
+    if apt-get install -y -qq "postgresql-${PG_VERSION}-pgvector" >> "$LOG_FILE" 2>&1; then
+        ok "pgvector (apt)"
+        PGVECTOR_INSTALLED=true
+    else
+        # Método 2: Adicionar repositório PGDG oficial
         step "Adicionando repositório PostgreSQL oficial..."
-        sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list' 2>/dev/null || true
-        wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - >> "$LOG_FILE" 2>&1 || true
+        if command -v lsb_release &>/dev/null; then
+            CODENAME=$(lsb_release -cs)
+        else
+            CODENAME=$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2)
+        fi
+        echo "deb http://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list 2>/dev/null || true
+        wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg 2>/dev/null || true
+        # Atualizar com a key ring
+        sed -i "s|deb http|deb [signed-by=/usr/share/keyrings/pgdg.gpg] http|" /etc/apt/sources.list.d/pgdg.list 2>/dev/null || true
         apt-get update -qq >> "$LOG_FILE" 2>&1 || true
 
         if apt-get install -y -qq "postgresql-${PG_VERSION}-pgvector" >> "$LOG_FILE" 2>&1; then
             ok "pgvector (PGDG repo)"
+            PGVECTOR_INSTALLED=true
         else
-            # Método 3: Compilar do fonte com headers corretos
+            # Método 3: Compilar do fonte
             warn "Compilando pgvector do fonte..."
             cd /tmp
             rm -rf pgvector 2>/dev/null
             if git clone --branch v0.7.4 https://github.com/pgvector/pgvector.git >> "$LOG_FILE" 2>&1; then
                 cd pgvector
-                if make PG_CONFIG=$(which pg_config) >> "$LOG_FILE" 2>&1 && make install PG_CONFIG=$(which pg_config) >> "$LOG_FILE" 2>&1; then
+                if make PG_CONFIG="$(which pg_config)" >> "$LOG_FILE" 2>&1 && \
+                   make install PG_CONFIG="$(which pg_config)" >> "$LOG_FILE" 2>&1; then
                     ok "pgvector (compilado)"
+                    PGVECTOR_INSTALLED=true
                 else
-                    fail "pgvector — compilação falhou (ver $LOG_FILE)"
-                    info "O sistema funciona sem pgvector, mas sem busca semântica"
+                    fail "pgvector — compilação falhou"
+                    info "Busca semântica será desabilitada"
                 fi
                 cd /tmp && rm -rf pgvector
             else
-                fail "pgvector — git clone falhou"
+                fail "pgvector — download falhou"
             fi
         fi
-    else
-        ok "pgvector (apt)"
     fi
-else
-    ok "pgvector"
 fi
 
 # ═══════════════════════════════════════════════════════════
@@ -228,10 +241,10 @@ ok "PostgreSQL em execução"
 # Gerar senha segura
 DB_PASSWORD="openpy_$(openssl rand -hex 16)"
 
-# Criar user e database (com proteção contra duplicatas)
+# Criar user e database
 step "Configurando banco de dados..."
 
-# Drop na ordem correta (database antes do user)
+# Drop na ordem correta
 sudo -u postgres psql -c "DROP DATABASE IF EXISTS openpy;" >> "$LOG_FILE" 2>&1 || true
 sudo -u postgres psql -c "DROP USER IF EXISTS openpy;" >> "$LOG_FILE" 2>&1 || true
 
@@ -239,7 +252,6 @@ sudo -u postgres psql -c "DROP USER IF EXISTS openpy;" >> "$LOG_FILE" 2>&1 || tr
 if sudo -u postgres psql -c "CREATE USER openpy WITH PASSWORD '$DB_PASSWORD';" >> "$LOG_FILE" 2>&1; then
     ok "User 'openpy' criado"
 else
-    # User pode já existir, tenta alterar senha
     warn "User já existe, atualizando senha..."
     sudo -u postgres psql -c "ALTER USER openpy WITH PASSWORD '$DB_PASSWORD';" >> "$LOG_FILE" 2>&1 || fail "Falha ao configurar user"
 fi
@@ -252,10 +264,14 @@ else
 fi
 
 # Extensões
-if sudo -u postgres psql -d openpy -c "CREATE EXTENSION IF NOT EXISTS vector;" >> "$LOG_FILE" 2>&1; then
-    ok "Extensão pgvector ativada"
+if $PGVECTOR_INSTALLED; then
+    if sudo -u postgres psql -d openpy -c "CREATE EXTENSION IF NOT EXISTS vector;" >> "$LOG_FILE" 2>&1; then
+        ok "Extensão pgvector ativada"
+    else
+        fail "Extensão pgvector falhou (ver $LOG_FILE)"
+    fi
 else
-    fail "Extensão pgvector falhou (ver $LOG_FILE)"
+    warn "pgvector não instalado — extensão vector ignorada"
 fi
 
 if sudo -u postgres psql -d openpy -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;" >> "$LOG_FILE" 2>&1; then
@@ -306,16 +322,16 @@ echo ""
 echo -e "    ${BOLD}1${NC} — OpenAI        ${DIM}(GPT-4o, GPT-4o-mini)${NC}"
 echo -e "    ${BOLD}2${NC} — Anthropic     ${DIM}(Claude Sonnet, Opus, Haiku)${NC}"
 echo -e "    ${BOLD}3${NC} — OpenRouter    ${DIM}(Todos os modelos ⭐)${NC}"
-echo -e "    ${BOLD}4${NC} — NVIDIA NIM    ${DIM}(Llama, Gemma, Qwen)${NC}"
+echo -e "    ${BOLD}4${NC} — NVIDIA NIM    ${DIM}(Llama, Gemma, Qwen — URL já configurada)${NC}"
 echo -e "    ${BOLD}5${NC} — Custom        ${DIM}(Endpoint OpenAI-compatível)${NC}"
 echo ""
 echo -ne "  ${BOLD}Provedores (ex: 1,3 ou 4): ${NC}"
 safe_read PROVIDER_SELECTION
 
-OPENAI_ENABLED=false; OPENAI_KEY=""
-ANTHROPIC_ENABLED=false; ANTHROPIC_KEY=""
-OPENROUTER_ENABLED=false; OPENROUTER_KEY=""
-NVIDIA_ENABLED=false; NVIDIA_KEY=""
+OPENAI_ENABLED=false; OPENAI_KEY=""; OPENAI_BASE="https://api.openai.com/v1"
+ANTHROPIC_ENABLED=false; ANTHROPIC_KEY=""; ANTHROPIC_BASE="https://api.anthropic.com"
+OPENROUTER_ENABLED=false; OPENROUTER_KEY=""; OPENROUTER_BASE="https://openrouter.ai/api/v1"
+NVIDIA_ENABLED=false; NVIDIA_KEY=""; NVIDIA_BASE="https://integrate.api.nvidia.com/v1"
 OPENCODE_ENABLED=false; OPENCODE_KEY=""; OPENCODE_BASE=""
 DEFAULT_MODEL=""; FALLBACK_MODEL=""
 
@@ -324,29 +340,46 @@ for p in "${PROVIDERS[@]}"; do
     p=$(echo "$p" | tr -d ' ')
     case "$p" in
         1)
-            echo -ne "\n  ${CYAN}OpenAI API Key: ${NC}"
+            echo ""
+            echo -ne "  ${CYAN}OpenAI API Key: ${NC}"
             safe_read_secret OPENAI_KEY; echo ""
+            echo -ne "  ${CYAN}Base URL (Enter = https://api.openai.com/v1): ${NC}"
+            safe_read OA_BASE
+            [[ -n "$OA_BASE" ]] && OPENAI_BASE="$OA_BASE"
             OPENAI_ENABLED=true
             [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="gpt-4o-mini"
-            ok "OpenAI ativado"
+            ok "OpenAI ativado → $OPENAI_BASE"
             ;;
         2)
-            echo -ne "\n  ${CYAN}Anthropic API Key: ${NC}"
+            echo ""
+            echo -ne "  ${CYAN}Anthropic API Key: ${NC}"
             safe_read_secret ANTHROPIC_KEY; echo ""
+            echo -ne "  ${CYAN}Base URL (Enter = https://api.anthropic.com): ${NC}"
+            safe_read AN_BASE
+            [[ -n "$AN_BASE" ]] && ANTHROPIC_BASE="$AN_BASE"
             ANTHROPIC_ENABLED=true
             [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="claude-sonnet-4-20250514"
-            ok "Anthropic ativado"
+            ok "Anthropic ativado → $ANTHROPIC_BASE"
             ;;
         3)
-            echo -ne "\n  ${CYAN}OpenRouter API Key: ${NC}"
+            echo ""
+            echo -ne "  ${CYAN}OpenRouter API Key: ${NC}"
             safe_read_secret OPENROUTER_KEY; echo ""
+            echo -ne "  ${CYAN}Base URL (Enter = https://openrouter.ai/api/v1): ${NC}"
+            safe_read OR_BASE
+            [[ -n "$OR_BASE" ]] && OPENROUTER_BASE="$OR_BASE"
             OPENROUTER_ENABLED=true
             [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="anthropic/claude-sonnet-4"
-            ok "OpenRouter ativado"
+            ok "OpenRouter ativado → $OPENROUTER_BASE"
             ;;
         4)
-            echo -ne "\n  ${CYAN}NVIDIA NIM API Key: ${NC}"
+            echo ""
+            info "Base URL padrão: https://integrate.api.nvidia.com/v1"
+            echo -ne "  ${CYAN}NVIDIA NIM API Key (nvapi-...): ${NC}"
             safe_read_secret NVIDIA_KEY; echo ""
+            echo -ne "  ${CYAN}Base URL (Enter = https://integrate.api.nvidia.com/v1): ${NC}"
+            safe_read NV_BASE
+            [[ -n "$NV_BASE" ]] && NVIDIA_BASE="$NV_BASE"
             echo -ne "  ${CYAN}Modelo padrão (Enter = meta/llama-3.1-405b-instruct): ${NC}"
             safe_read NV_MODEL
             echo -ne "  ${CYAN}Modelo fallback (Enter = pular): ${NC}"
@@ -354,10 +387,11 @@ for p in "${PROVIDERS[@]}"; do
             NVIDIA_ENABLED=true
             [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="${NV_MODEL:-meta/llama-3.1-405b-instruct}"
             [[ -n "${NV_FALLBACK:-}" ]] && FALLBACK_MODEL="$NV_FALLBACK"
-            ok "NVIDIA NIM ativado"
+            ok "NVIDIA NIM ativado → $NVIDIA_BASE"
             ;;
         5)
-            echo -ne "\n  ${CYAN}Base URL: ${NC}"
+            echo ""
+            echo -ne "  ${CYAN}Base URL: ${NC}"
             safe_read OPENCODE_BASE
             echo -ne "  ${CYAN}API Key: ${NC}"
             safe_read_secret OPENCODE_KEY; echo ""
@@ -365,7 +399,7 @@ for p in "${PROVIDERS[@]}"; do
             safe_read CUSTOM_MODEL
             OPENCODE_ENABLED=true
             [[ -z "$DEFAULT_MODEL" ]] && DEFAULT_MODEL="${CUSTOM_MODEL:-custom}"
-            ok "Custom ativado"
+            ok "Custom ativado → $OPENCODE_BASE"
             ;;
         *) warn "Opção '$p' ignorada" ;;
     esac
@@ -399,13 +433,13 @@ if [[ -n "$BOT_TOKEN" ]]; then
         BOT_NAME=$(echo "$BOT_TEST" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['username'])" 2>/dev/null || echo "?")
         ok "Bot validado: @$BOT_NAME"
     else
-        warn "Token não validado — verifique depois em openpy.toml"
+        warn "Token não validado — verifique depois com: openpy config"
     fi
 else
     warn "Token vazio — configure depois com: openpy config"
 fi
 
-# Validar User ID (deve ser número)
+# Validar User ID
 if [[ -n "$TELEGRAM_USER_ID" ]] && [[ "$TELEGRAM_USER_ID" =~ ^[0-9]+$ ]]; then
     ok "User ID: $TELEGRAM_USER_ID"
 else
@@ -419,7 +453,10 @@ fi
 header "[7/8] Configuração"
 
 cat > "$CONFIG_FILE" << TOMLEOF
+# ═══════════════════════════════════════════════════════════
 # Open-PY Config — Gerado em $(date -Iseconds)
+# Edite com: openpy config
+# ═══════════════════════════════════════════════════════════
 
 [core]
 name = "Open-PY"
@@ -456,22 +493,22 @@ max_search_results = 10
 
 [providers.openai]
 api_key = "$OPENAI_KEY"
-api_base = ""
+api_base = "$OPENAI_BASE"
 enabled = $OPENAI_ENABLED
 
 [providers.anthropic]
 api_key = "$ANTHROPIC_KEY"
-api_base = ""
+api_base = "$ANTHROPIC_BASE"
 enabled = $ANTHROPIC_ENABLED
 
 [providers.openrouter]
 api_key = "$OPENROUTER_KEY"
-api_base = ""
+api_base = "$OPENROUTER_BASE"
 enabled = $OPENROUTER_ENABLED
 
 [providers.nvidia]
 api_key = "$NVIDIA_KEY"
-api_base = "https://integrate.api.nvidia.com/v1"
+api_base = "$NVIDIA_BASE"
 enabled = $NVIDIA_ENABLED
 
 [providers.opencode]
@@ -499,13 +536,14 @@ sys.path.insert(0, '$INSTALL_DIR')
 try:
     from shared.migrations import run_migrations
     asyncio.run(run_migrations('postgresql://openpy:$DB_PASSWORD@localhost:5432/openpy'))
+    print('OK')
 except Exception as e:
-    print(f'Migration warning: {e}', file=sys.stderr)
+    print(f'WARN: {e}', file=sys.stderr)
     sys.exit(0)
 " >> "$LOG_FILE" 2>&1; then
-    ok "Banco de dados configurado"
+    ok "Banco de dados configurado (6 tabelas)"
 else
-    warn "Migrations com avisos (mas continuando)"
+    warn "Migrations com avisos — verifique com: openpy doctor"
 fi
 
 # ═══════════════════════════════════════════════════════════
@@ -542,7 +580,7 @@ ok "Serviço systemd criado e habilitado"
 # CLI
 cat > /usr/local/bin/openpy << 'CLIEOF'
 #!/bin/bash
-# Open-PY CLI v2.1
+# Open-PY CLI v2.2
 INSTALL_DIR="/opt/open-py"
 VENV="$INSTALL_DIR/venv/bin/python3"
 
@@ -613,8 +651,8 @@ if [[ $ERRORS -eq 0 ]]; then
     echo -e "${GREEN}╚═══════════════════════════════════════════════════╝${NC}"
 else
     echo -e "${YELLOW}╔═══════════════════════════════════════════════════╗${NC}"
-    echo -e "${YELLOW}║   ⚠️  INSTALADO COM $ERRORS AVISO(S)               ║${NC}"
-    echo -e "${YELLOW}║   Verifique: cat $LOG_FILE        ║${NC}"
+    echo -e "${YELLOW}║   ⚠️  INSTALADO COM $ERRORS AVISO(S)                ║${NC}"
+    echo -e "${YELLOW}║   Verifique: cat $LOG_FILE          ║${NC}"
     echo -e "${YELLOW}╚═══════════════════════════════════════════════════╝${NC}"
 fi
 echo ""
