@@ -86,46 +86,207 @@ class TelegramBot:
             if not self._is_authorized(message.from_user.id):
                 return
             await message.reply(
-                "🧠 **Open-PY v1.0** está online!\n\n"
-                "Envie qualquer mensagem, imagem, áudio ou documento.\n"
-                "Use /help para ver todos os comandos."
+                "🧠 **Open-PY v3.1** está online!\n\n"
+                "Sou o Ori — seu agente autônomo.\n"
+                "Envie qualquer mensagem, imagem, áudio ou documento.\n\n"
+                "Use /commands para ver tudo que posso fazer."
             )
 
         @self.dp.message(Command("help"))
         async def cmd_help(message: types.Message):
             if not self._is_authorized(message.from_user.id):
                 return
-            help_text = (
-                "📖 **Comandos Open-PY**\n\n"
-                "**Sistema**\n"
-                "/status — Status do sistema\n"
-                "/doctor — Diagnóstico completo\n"
-                "/soul — Ver soul.md\n"
-                "/essence — Ver essence.md\n\n"
-                "**Memória**\n"
-                "/memory — Stats de memória\n"
-                "/remember <texto> — Salvar memória\n"
-                "/recall <busca> — Buscar memórias\n"
-                "/forget <id> — Esquecer memória\n\n"
-                "**Agentes**\n"
-                "/agents — Listar agentes\n"
-                "/spawn <nome> — Criar agente\n"
-                "/kill <nome> — Destruir agente\n\n"
-                "**Tarefas**\n"
-                "/tasks — Tarefas ativas\n"
-                "/cancel <id> — Cancelar tarefa\n\n"
-                "**Config**\n"
-                "/config — Ver configuração\n"
+            await message.reply(
+                "Use /commands para ver a lista completa de comandos."
             )
-            await message.reply(help_text)
+
+        @self.dp.message(Command("commands"))
+        async def cmd_commands(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            text = (
+                "📖 **Todos os Comandos Open-PY**\n\n"
+
+                "🔧 **Sistema**\n"
+                "/start — Iniciar o bot\n"
+                "/commands — Esta lista de comandos\n"
+                "/status — RAM, disco, agentes, tarefas\n"
+                "/health — Healthcheck de todos os componentes\n"
+                "/audit — Integridade do audit log (SHA-256)\n\n"
+
+                "🧬 **Identidade**\n"
+                "/soul — Ver memória permanente (soul.md)\n"
+                "/essence — Ver personalidade (essence.md)\n\n"
+
+                "💾 **Memória**\n"
+                "/memory — Estatísticas de memória\n"
+                "/remember <texto> — Salvar fato manualmente\n"
+                "/recall <busca> — Buscar memórias (semântico)\n"
+                "/forget <id> — Esquecer memória específica\n\n"
+
+                "🤖 **Agentes**\n"
+                "/agents — Listar agentes ativos\n"
+                "/spawn <nome> — Criar agente customizado\n"
+                "/kill <nome> — Destruir agente\n\n"
+
+                "📋 **Tarefas**\n"
+                "/tasks — Ver tarefas em execução\n"
+                "/cancel <id> — Cancelar tarefa\n\n"
+
+                "🔌 **Provedores & Modelos**\n"
+                "/providers — Listar provedores configurados\n"
+                "/provider <nome> — Trocar provedor ativo\n"
+                "/model <modelo> — Trocar modelo do provedor ativo\n"
+                "/addprovider <nome> <api_key> [url] — Adicionar provedor\n"
+                "/addmodel <provedor> <modelo> — Definir modelo para provedor\n\n"
+
+                "⚙️ **Config**\n"
+                "/config — Ver configuração atual\n"
+            )
+            await message.reply(text)
+
+        # === PROVEDORES & MODELOS ===
+        @self.dp.message(Command("providers"))
+        async def cmd_providers(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            if not self.core.llm_router:
+                await message.reply("⚠️ Nenhum provedor LLM configurado.")
+                return
+            providers = self.core.llm_router.list_providers()
+            if not providers:
+                await message.reply("Nenhum provedor configurado.")
+                return
+            text = "🔌 **Provedores LLM**\n\n"
+            for p in providers:
+                active = " ← ATIVO" if p["active"] else ""
+                emoji = "🟢" if p["active"] else "⚪"
+                text += f"{emoji} **{p['name']}** — `{p['model']}`{active}\n"
+            info = self.core.llm_router.get_current_info()
+            text += f"\nTotal: {info['total_providers']} provedor(es)"
+            await message.reply(text)
+
+        @self.dp.message(Command("provider"))
+        async def cmd_provider(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            name = message.text.replace("/provider", "").strip()
+            if not name:
+                # Sem argumento: mostrar ativo
+                if self.core.llm_router:
+                    info = self.core.llm_router.get_current_info()
+                    await message.reply(
+                        f"🔌 Provedor ativo: **{info['provider']}**\n"
+                        f"Modelo: `{info['model']}`\n\n"
+                        f"Para trocar: /provider <nome>"
+                    )
+                else:
+                    await message.reply("⚠️ Nenhum provedor configurado.")
+                return
+            if not self.core.llm_router:
+                await message.reply("⚠️ Nenhum provedor configurado.")
+                return
+            result = self.core.llm_router.set_active_provider(name)
+            await message.reply(result["message"])
+
+        @self.dp.message(Command("model"))
+        async def cmd_model(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            model = message.text.replace("/model", "").strip()
+            if not model:
+                if self.core.llm_router:
+                    info = self.core.llm_router.get_current_info()
+                    await message.reply(
+                        f"🤖 Modelo atual: `{info['model']}`\n"
+                        f"Provedor: **{info['provider']}**\n\n"
+                        f"Para trocar: /model <nome_do_modelo>"
+                    )
+                else:
+                    await message.reply("⚠️ Nenhum provedor configurado.")
+                return
+            if not self.core.llm_router:
+                await message.reply("⚠️ Nenhum provedor configurado.")
+                return
+            result = self.core.llm_router.set_model(model)
+            await message.reply(result["message"])
+
+        @self.dp.message(Command("addprovider"))
+        async def cmd_addprovider(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            parts = message.text.replace("/addprovider", "").strip().split()
+            if len(parts) < 2:
+                await message.reply(
+                    "Use: /addprovider <nome> <api_key> [api_base]\n\n"
+                    "Exemplos:\n"
+                    "`/addprovider openrouter sk-or-xxx`\n"
+                    "`/addprovider openai sk-xxx`\n"
+                    "`/addprovider nvidia nvapi-xxx https://integrate.api.nvidia.com/v1`"
+                )
+                return
+            name = parts[0].lower()
+            api_key = parts[1]
+            api_base = parts[2] if len(parts) > 2 else None
+
+            if not self.core.llm_router:
+                await message.reply("⚠️ Sistema de LLM não inicializado.")
+                return
+
+            result = self.core.llm_router.add_provider(name, api_key, api_base=api_base)
+            await message.reply(result["message"])
+
+            # Audit log
+            try:
+                await self.audit.log(
+                    actor=f"user:{message.from_user.id}",
+                    action="add_provider",
+                    target=name,
+                    severity="info",
+                )
+            except Exception:
+                pass
+
+        @self.dp.message(Command("addmodel"))
+        async def cmd_addmodel(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            parts = message.text.replace("/addmodel", "").strip().split(maxsplit=1)
+            if len(parts) < 2:
+                await message.reply(
+                    "Use: /addmodel <provedor> <modelo>\n\n"
+                    "Exemplos:\n"
+                    "`/addmodel openrouter qwen/qwen3-235b-a22b:free`\n"
+                    "`/addmodel openai gpt-4o`\n"
+                    "`/addmodel anthropic claude-sonnet-4-20250514`"
+                )
+                return
+            provider = parts[0].lower()
+            model = parts[1].strip()
+
+            if not self.core.llm_router:
+                await message.reply("⚠️ Sistema de LLM não inicializado.")
+                return
+
+            result = self.core.llm_router.set_model(model, provider=provider)
+            await message.reply(result["message"])
 
         @self.dp.message(Command("status"))
         async def cmd_status(message: types.Message):
             if not self._is_authorized(message.from_user.id):
                 return
             status = await self.core.get_system_status()
+            # Adicionar info de provedor ativo
+            provider_info = ""
+            if self.core.llm_router:
+                info = self.core.llm_router.get_current_info()
+                provider_info = (
+                    f"🔌 Provedor: {info['provider']}\n"
+                    f"🤖 Modelo: `{info['model']}`\n"
+                )
             text = (
-                "📊 **Status Open-PY**\n\n"
+                "📊 **Status Open-PY v3.1**\n\n"
+                f"{provider_info}"
                 f"🧠 Memórias: {status['memory_count']}\n"
                 f"🤖 Agentes: {status['active_agents']}\n"
                 f"📋 Tarefas: {status['pending_tasks']}\n"
@@ -273,7 +434,7 @@ class TelegramBot:
             if recent:
                 text += "\n**Últimas ações:**\n"
                 for entry in recent:
-                    text += f"• `{entry['action']}` por {entry['actor']} \u2192 {entry.get('target', '-')}\n"
+                    text += f"• `{entry['action']}` por {entry['actor']} → {entry.get('target', '-')}\n"
             await message.reply(text)
 
         # === MENSAGENS DE TEXTO (catch-all) ===
@@ -487,14 +648,18 @@ class TelegramBot:
         # Registrar comandos no menu
         commands = [
             BotCommand(command="start", description="Iniciar bot"),
-            BotCommand(command="help", description="Ajuda"),
+            BotCommand(command="commands", description="Lista completa de comandos"),
             BotCommand(command="status", description="Status do sistema"),
             BotCommand(command="health", description="Healthcheck completo"),
+            BotCommand(command="providers", description="Listar provedores LLM"),
+            BotCommand(command="provider", description="Trocar provedor ativo"),
+            BotCommand(command="model", description="Trocar modelo ativo"),
             BotCommand(command="memory", description="Stats de memória"),
             BotCommand(command="agents", description="Listar agentes"),
             BotCommand(command="tasks", description="Tarefas ativas"),
             BotCommand(command="remember", description="Salvar memória"),
             BotCommand(command="recall", description="Buscar memórias"),
+            BotCommand(command="audit", description="Audit log (SHA-256)"),
             BotCommand(command="soul", description="Ver soul.md"),
             BotCommand(command="essence", description="Ver essence.md"),
         ]
