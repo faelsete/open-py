@@ -55,11 +55,12 @@ class Orchestrator:
     """
 
     def __init__(self, agent_registry=None, agent_factory=None,
-                 memory_manager=None, db_pool=None):
+                 memory_manager=None, db_pool=None, audit_log=None):
         self.registry = agent_registry
         self.factory = agent_factory
         self.memory = memory_manager
         self.db = db_pool
+        self.audit = audit_log
         self._active_tasks: dict[str, AgentTask] = {}
 
         # Tracking para quotas
@@ -70,6 +71,9 @@ class Orchestrator:
         self._agent_health: dict[str, dict] = defaultdict(
             lambda: {"failures": 0, "last_failure": None, "healthy": True}
         )
+
+        # Fallback stats (observabilidade)
+        self._fallback_stats: dict[str, int] = defaultdict(int)  # agent → fallback count
 
     async def dispatch(self, thinking: ThinkingResult,
                        attachments: list[str] = None) -> AgentResult:
@@ -98,12 +102,38 @@ class Orchestrator:
 
         for agent_name in agents_to_try:
             if agent_name is None:
-                # Fallback final: Core resolve diretamente
-                log.info("🔄 Fallback para Core (sem agente disponível)")
+                # Fallback EXPLÍCITO: Core assume com log detalhado
+                chain_tried = [a for a in agents_to_try if a is not None]
+                log.warning(
+                    "🔄 FALLBACK → Core assumindo tarefa",
+                    original_agent=thinking.target_agent,
+                    chain_tried=chain_tried,
+                    reason="Nenhum agente na chain está disponível/saudável",
+                    task_preview=task.task[:200],
+                )
+                self._fallback_stats[thinking.target_agent] += 1
+
+                # Registrar no audit log
+                if self.audit:
+                    try:
+                        await self.audit.log(
+                            actor="system:orchestrator",
+                            action="fallback_to_core",
+                            target=thinking.target_agent,
+                            severity="warning",
+                            payload={
+                                "chain_tried": chain_tried,
+                                "task_id": task.task_id,
+                                "reason": "agent_chain_exhausted",
+                            }
+                        )
+                    except Exception:
+                        pass
+
                 return AgentResult(
                     task_id=task.task_id,
                     status=TaskStatus.COMPLETED,
-                    output=f"[Core resolvendo diretamente — agente '{thinking.target_agent}' indisponível]"
+                    output=f"[Core resolvendo diretamente — agente '{thinking.target_agent}' indisponível (chain: {chain_tried})]"
                 )
 
             # Checar se agente está saudável
@@ -351,6 +381,10 @@ Você é um agente do Open-PY. Regras invioláveis:
             }
             for name, info in self._agent_health.items()
         }
+
+    def get_fallback_stats(self) -> dict:
+        """Estatísticas de fallback — quantas vezes cada agente caiu pro Core"""
+        return dict(self._fallback_stats)
 
     # ============================================
     # TASK MANAGEMENT

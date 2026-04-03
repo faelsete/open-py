@@ -1,6 +1,12 @@
 """
 Open-PY — Memory Manager
 3 camadas: Contexto (RAM) → memory.md (filesystem) → PostgreSQL (longo prazo)
+
+Formato de I/O:
+- Buffer (RAM):   list[dict] com {role, content, timestamp, tokens}
+- Filesystem:     data/memory/daily/YYYY-MM-DD_NNN.md (markdown)
+- PostgreSQL:     tabela 'memories' com id, content, source, tags[], embedding, created_at
+- Preferências:   tabela 'memories' com tag 'preferência/*' e importance >= 7
 """
 
 import os
@@ -18,6 +24,38 @@ from shared.models import Memory, MemoryType
 from shared.logger import get_logger
 
 log = get_logger("memory")
+
+# ============================================
+# FORMATOS E CAMINHOS — Referência canônica
+# ============================================
+
+MEMORY_PATHS = {
+    "daily_dir":    "data/memory/daily/",          # memory.md temporários
+    "audit_dir":    "data/audit/",                  # audit trail (JSONL)
+    "media_dir":    "data/media/",                  # photo/ audio/ video/ document/
+    "soul":         "data/soul.md",                 # memória permanente
+    "essence":      "data/essence.md",              # personalidade
+    "versions":     "data/identity_versions/",      # backups de soul/essence
+}
+
+MEMORY_SCHEMA = {
+    "buffer_entry": {
+        "role": "str (user|assistant)",
+        "content": "str",
+        "timestamp": "ISO 8601",
+        "tokens": "int (estimado)",
+    },
+    "md_file": {
+        "format": "markdown",
+        "naming": "YYYY-MM-DD_NNN.md",
+        "content": "## User\\n{input}\\n\\n## Assistant\\n{response}",
+    },
+    "db_table": {
+        "table": "memories",
+        "columns": "id SERIAL, content TEXT, source TEXT, tags TEXT[], "
+                   "embedding VECTOR(384), importance INT, created_at TIMESTAMP",
+    },
+}
 
 
 class MemoryManager:
@@ -40,7 +78,7 @@ class MemoryManager:
         self.db = db_pool
         self.config = config
         self.install_dir = install_dir
-        self.daily_dir = Path(install_dir) / "data" / "memory" / "daily"
+        self.daily_dir = Path(install_dir) / MEMORY_PATHS["daily_dir"]
         self.daily_dir.mkdir(parents=True, exist_ok=True)
 
         # Buffer de contexto (Camada 1)
@@ -51,6 +89,16 @@ class MemoryManager:
 
         # Embedder (carregado sob demanda)
         self._embedder = None
+
+    def get_memory_layout(self) -> dict:
+        """Retorna layout completo de memória para debug/observabilidade"""
+        return {
+            "paths": {k: str(Path(self.install_dir) / v) for k, v in MEMORY_PATHS.items()},
+            "schema": MEMORY_SCHEMA,
+            "buffer_size": len(self._buffer),
+            "buffer_tokens": self._buffer_tokens,
+            "md_files": len(list(self.daily_dir.glob("*.md"))),
+        }
 
     # ============================================
     # CAMADA 1: BUFFER DE CONTEXTO

@@ -80,15 +80,20 @@ class OpenPY:
         # 7. Sistema de agentes
         await self._init_agents()
 
-        # 8. Orchestrator
+        # 8. Orchestrator (com audit log)
         from core.orchestrator import Orchestrator
+        from core.audit_log import AuditLog
+        self._audit_log = AuditLog(
+            log_dir=str(Path(self.config.core.install_dir) / "data" / "audit")
+        )
         self.orchestrator = Orchestrator(
             agent_registry=self.agent_registry,
             agent_factory=self.agent_factory,
             memory_manager=self.memory_manager,
             db_pool=self.db_pool,
+            audit_log=self._audit_log,
         )
-        log.info("✅ Orchestrator pronto")
+        log.info("✅ Orchestrator pronto (com audit trail)")
 
         # 9. Scheduler (heartbeat + cron)
         await self._init_scheduler()

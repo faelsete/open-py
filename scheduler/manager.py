@@ -1,10 +1,10 @@
 """
 Open-PY — Scheduler Manager
-Heartbeat, cron jobs e migração diária de memórias.
+Heartbeat, cron jobs, cleanup e migração diária de memórias.
 """
 
 import psutil
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -51,10 +51,19 @@ class SchedulerManager:
             id="memory_flush",
         )
 
+        # Cleanup — a cada 5 min (evita vazamento de memória em bots de longo uptime)
+        self.scheduler.add_job(
+            self._cleanup,
+            'interval',
+            minutes=5,
+            id="cleanup",
+        )
+
         self.scheduler.start()
         log.info("✅ Scheduler iniciado",
                  heartbeat=f"{interval}s",
-                 migration=f"{config.memory.migration_hour:02d}:{config.memory.migration_minute:02d}")
+                 migration=f"{config.memory.migration_hour:02d}:{config.memory.migration_minute:02d}",
+                 cleanup="5min")
 
     def shutdown(self):
         """Para o scheduler"""
@@ -101,6 +110,73 @@ class SchedulerManager:
             log.debug("💓 Heartbeat: OK")
 
         self._last_heartbeat = report["timestamp"]
+
+    # ============================================
+    # CLEANUP — Evita memory leak em bots de longo uptime
+    # ============================================
+
+    async def _cleanup(self):
+        """
+        Limpeza periódica de estado stale (a cada 5 min):
+        - Chats inativos > 10min no batcher/pending_replies
+        - Entradas expiradas no rate limiter
+        - Tasks órfãs no orchestrator
+        """
+        cleaned = 0
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=10)
+
+        # 1. Limpar pending_replies do Telegram bot (chats inativos > 10min)
+        bot = self.core.telegram_bot
+        if bot and hasattr(bot, '_pending_replies'):
+            stale_chats = []
+            for chat_id, msg in bot._pending_replies.items():
+                if hasattr(msg, 'date') and msg.date:
+                    try:
+                        msg_time = msg.date.replace(tzinfo=None) if msg.date.tzinfo else msg.date
+                        if msg_time < cutoff:
+                            stale_chats.append(chat_id)
+                    except Exception:
+                        stale_chats.append(chat_id)
+            for chat_id in stale_chats:
+                bot._pending_replies.pop(chat_id, None)
+                cleaned += 1
+
+        # 2. Limpar batcher (chats com timers cancelados/expirados)
+        if bot and hasattr(bot, 'batcher') and hasattr(bot.batcher, '_pending'):
+            stale_batch = [
+                cid for cid in list(bot.batcher._pending.keys())
+                if cid not in (bot._pending_replies or {})
+            ]
+            for cid in stale_batch:
+                bot.batcher._pending.pop(cid, None)
+                cleaned += 1
+
+        # 3. Limpar rate limiter buckets velhos (> 30min sem uso)
+        if bot and hasattr(bot, 'rate_limiter') and hasattr(bot.rate_limiter, '_buckets'):
+            rl = bot.rate_limiter
+            old_cutoff = now.timestamp() - 1800  # 30 min
+            stale_buckets = [
+                k for k, v in rl._buckets.items()
+                if hasattr(v, 'last_update') and v.last_update < old_cutoff
+            ]
+            for k in stale_buckets:
+                del rl._buckets[k]
+                cleaned += 1
+
+        # 4. Limpar tarefas órfãs no orchestrator (> 30min)
+        if self.core.orchestrator and hasattr(self.core.orchestrator, '_active_tasks'):
+            orch = self.core.orchestrator
+            stale_tasks = [
+                tid for tid, task in orch._active_tasks.items()
+                if hasattr(task, 'created_at') and task.created_at < cutoff
+            ]
+            for tid in stale_tasks:
+                orch._active_tasks.pop(tid, None)
+                cleaned += 1
+
+        if cleaned > 0:
+            log.info("🧹 Cleanup: removidos itens stale", cleaned=cleaned)
 
     # ============================================
     # MEMÓRIA
