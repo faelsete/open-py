@@ -829,6 +829,40 @@ case "${1:-help}" in
             rm -rf "$INSTALL_DIR"; rm -f /usr/local/bin/openpy
             echo "✅ Open-PY removido"
         fi ;;
+    nuke)
+        echo "☢️  Nuclear Reset — apaga TUDO (DB, memórias, config, venv)"
+        if [[ -f "$INSTALL_DIR/nuke.sh" ]]; then
+            bash "$INSTALL_DIR/nuke.sh"
+        else
+            echo "❌ nuke.sh não encontrado em $INSTALL_DIR"
+        fi ;;
+    rollback)
+        TAG="${2:-}"
+        if [[ -z "$TAG" ]]; then
+            echo "Uso: openpy rollback <tag>"
+            echo "Tags disponíveis:"
+            cd "$INSTALL_DIR" && git tag -l "v*" --sort=-version:refname
+        else
+            echo "🔄 Voltando para $TAG..."
+            cd "$INSTALL_DIR" && git fetch --tags 2>/dev/null
+            git checkout "$TAG" 2>/dev/null
+            if [[ $? -eq 0 ]]; then
+                source "$INSTALL_DIR/venv/bin/activate" 2>/dev/null
+                pip install -q -r "$INSTALL_DIR/requirements.txt" 2>/dev/null
+                systemctl restart open-py 2>/dev/null
+                echo "✅ Rollback para $TAG concluído"
+            else
+                echo "❌ Tag '$TAG' não encontrada"
+            fi
+        fi ;;
+    tags)
+        echo "📌 Versões disponíveis:"
+        cd "$INSTALL_DIR" && git tag -l "v*" --sort=-version:refname | while read tag; do
+            msg=$(git tag -l --format='%(contents:subject)' "$tag" 2>/dev/null)
+            echo "  $tag — $msg"
+        done
+        echo ""
+        echo "Para voltar: openpy rollback <tag>" ;;
     *)
         echo ""
         echo "  🧠 Open-PY v$(cat $INSTALL_DIR/VERSION 2>/dev/null || echo '?')"
@@ -845,6 +879,9 @@ case "${1:-help}" in
         echo "  openpy essence     Editar personalidade"
         echo "  openpy update      Atualizar via GitHub"
         echo "  openpy version     Ver versão"
+        echo "  openpy tags        Listar versões"
+        echo "  openpy rollback    Voltar para versão anterior"
+        echo "  openpy nuke        ☢️  Reset nuclear (apaga TUDO)"
         echo "  openpy uninstall   Remover tudo"
         echo "" ;;
 esac

@@ -537,6 +537,10 @@ openpy config      # Editar openpy.toml no editor
 openpy soul        # Editar memória permanente
 openpy essence     # Editar personalidade
 openpy version     # Ver versão
+openpy tags        # 📌 Listar todas as versões disponíveis
+openpy rollback    # 🔄 Voltar para versão anterior (ex: openpy rollback v2.2.0)
+openpy update      # Atualizar via GitHub (git pull + pip install + restart)
+openpy nuke        # ☢️  Reset nuclear (apaga DB, memórias, config, TUDO)
 openpy uninstall   # Remover completamente (pede confirmação)
 ```
 
