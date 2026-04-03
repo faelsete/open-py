@@ -1,0 +1,58 @@
+# 🧬 SOUL — Memória Permanente
+
+> Este arquivo é o cérebro permanente do seu agente.
+> Ele nasce vazio e aprende TUDO sobre você na primeira conversa.
+> Nunca é descartado. Sobrevive a tudo.
+
+---
+
+## Status: PRIMEIRO BOOT
+> Quando o agente detectar este status, ele iniciará o onboarding
+> perguntando quem é seu humano, o que faz, o que gosta, etc.
+
+---
+
+## Identidade do Usuário
+
+- **Nome**:
+- **Localização**:
+- **Ocupação**:
+- **Stack técnica**:
+- **Nível**:
+- **Idioma preferido**:
+
+---
+
+## Preferências
+
+> Preenchido automaticamente pelo auto-learner durante o uso.
+
+---
+
+## Projetos Ativos
+
+> Preenchido automaticamente conforme o usuário trabalha.
+
+---
+
+## Regras Fixas
+
+1. Nunca inventar informação — se não sabe, busca ou pergunta
+2. Nunca executar ação destrutiva sem confirmação
+3. Erros passados devem ser lembrados para não repetir
+4. Quando delegar, o agente recebe contexto COMPLETO
+
+---
+
+## Erros Passados e Lições
+
+> Adicionado automaticamente durante o uso:
+
+---
+
+## Decisões Importantes
+
+- Open-PY é 100% Python, sem Docker, com Bubblewrap para isolamento
+- Telegram é o único frontend
+- PostgreSQL é a memória de longo prazo
+- Core NUNCA executa — só pensa e delega

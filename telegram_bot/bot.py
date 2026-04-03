@@ -85,12 +85,35 @@ class TelegramBot:
         async def cmd_start(message: types.Message):
             if not self._is_authorized(message.from_user.id):
                 return
-            await message.reply(
-                "🧠 **Open-PY v3.1** está online!\n\n"
-                "Sou o Ori — seu agente autônomo.\n"
-                "Envie qualquer mensagem, imagem, áudio ou documento.\n\n"
-                "Use /commands para ver tudo que posso fazer."
-            )
+
+            # Detectar primeiro boot (soul.md contém "PRIMEIRO BOOT")
+            is_first_boot = False
+            if hasattr(self.core, '_soul') and "PRIMEIRO BOOT" in (self.core._soul or ""):
+                is_first_boot = True
+
+            if is_first_boot:
+                await message.reply(
+                    "🌱 **Acabei de nascer!**\n\n"
+                    "Sou seu novo agente autônomo. "
+                    "Ainda não sei nada sobre você, mas quero aprender tudo.\n\n"
+                    "Me conta:\n"
+                    "1️⃣ Qual seu nome?\n"
+                    "2️⃣ Onde você mora?\n"
+                    "3️⃣ O que você faz (trabalho/profissão)?\n"
+                    "4️⃣ Quais tecnologias/ferramentas você usa?\n"
+                    "5️⃣ Como quer que eu me comporte? "
+                    "(direto, detalhista, engraçado, sério...)\n"
+                    "6️⃣ Qual idioma preferido?\n"
+                    "7️⃣ Quer me dar um nome?\n\n"
+                    "Pode responder tudo junto ou aos poucos — "
+                    "eu vou guardando e aprendendo! 🧠"
+                )
+            else:
+                await message.reply(
+                    "🧠 **Open-PY v3.1** está online!\n\n"
+                    "Envie qualquer mensagem, imagem, áudio ou documento.\n\n"
+                    "Use /commands para ver tudo que posso fazer."
+                )
 
         @self.dp.message(Command("help"))
         async def cmd_help(message: types.Message):

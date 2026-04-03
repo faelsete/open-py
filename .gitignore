@@ -1,4 +1,9 @@
-# Python
+# ═══════════════════════════════════════════════════
+# Open-PY .gitignore — Blindagem total
+# Nenhum dado pessoal, credencial ou cache vai pro GitHub
+# ═══════════════════════════════════════════════════
+
+# ─── Python ───
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,39 +12,66 @@ __pycache__/
 dist/
 build/
 *.egg
+.eggs/
 
-# Virtual Environment
+# ─── Virtual Environment ───
 venv/
 .venv/
 env/
+.env
 
-# IDE
+# ─── IDE & Editor ───
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.project
+.settings/
 
-# Config com credenciais (NUNCA commitar)
+# ─── Config com credenciais (NUNCA commitar) ───
 openpy.toml
 
-# Dados runtime
-data/memory/daily/*.md
-data/agents/*
-data/media/**/*
-data/backups/*
-data/logs/*
+# ─── Dados pessoais do usuário (gerados pelo install.sh) ───
+data/soul.md
+data/essence.md
 
-# Temporários
+# ─── Dados runtime (criados durante uso) ───
+data/memory/
+data/agents/
+data/media/
+data/backups/
+data/logs/
+data/audit/
+data/tools/custom/*
+!data/tools/custom/.gitkeep
+data/identity_versions/
+
+# ─── Temporários e logs ───
 /tmp/
 *.log
 *.pid
+*.lock
 
-# OS
+# ─── OS ───
 .DS_Store
 Thumbs.db
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
 
-# Tests locais
+# ─── Tests locais ───
 tests/b*.py
 tests/wsl_run.sh
 tests/run_tests.sh
+htmlcov/
+.coverage
+.pytest_cache/
+.mypy_cache/
+
+# ─── Misc ───
+*.bak
+*.tmp
+*.orig
+*.rej
+node_modules/
