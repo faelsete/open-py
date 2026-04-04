@@ -92,6 +92,9 @@ class MemoryManager:
 
         # Embedder (carregado sob demanda)
         self._embedder = None
+        
+        # LLM Router injetado para sumarização de memória
+        self.llm_router = None
 
     def get_memory_layout(self) -> dict:
         """Retorna layout completo de memória para debug/observabilidade"""
@@ -139,6 +142,10 @@ class MemoryManager:
         now = datetime.now()
         hour_changed = now.hour != self._current_hour
 
+        # === FASE 9: COMPACTAÇÃO AUTOMÁTICA ===
+        if len(self._buffer) >= 20:
+            asyncio.create_task(self.compact_buffer())
+
         # Verificar se deve fazer backup intermediário do buffer
         should_sync = (
             len(self._buffer) > 0 and len(self._buffer) % 5 == 0 or
@@ -151,6 +158,47 @@ class MemoryManager:
             self._current_hour = now.hour
         elif should_sync:
             await self._save_buffer_to_md(clear_buffer=False)
+
+    async def compact_buffer(self):
+        """
+        Fase 9: Context Compaction.
+        A cada 20 interações, resume as 15 mais antigas e mantém as 5 mais recentes.
+        """
+        if len(self._buffer) >= 20 and getattr(self, 'llm_router', None):
+            log.info("🗜️ Iniciando compactação do buffer de contexto...", size=len(self._buffer))
+            try:
+                # Separar as 15 antigas e as restantes recentes
+                old_entries = self._buffer[:15]
+                recent_entries = self._buffer[15:]
+                
+                # Montar texto para resumir
+                text_to_summarize = "Resuma o seguinte trecho da conversa mantendo fatos importantes, contexto técnico e decisões:\n\n"
+                for i, entry in enumerate(old_entries):
+                    text_to_summarize += f"[{i+1}] User: {entry['user']}\nAssistant: {entry['assistant']}\n\n"
+                    
+                # Pedir resumo ao LLM
+                summary = await self.llm_router.complete(
+                    messages=[{"role": "user", "content": text_to_summarize}],
+                    max_tokens=300,
+                    temperature=0.3
+                )
+                
+                # Criar nova entrada sumarizada
+                summarized_entry = {
+                    "timestamp": datetime.now().isoformat(),
+                    "user": "[CONTEXTO COMPACTADO]",
+                    "assistant": f"[Resumo de 15 mensagens anteriores]: {summary.strip()}"
+                }
+                
+                # Atualizar buffer
+                self._buffer = [summarized_entry] + recent_entries
+                
+                # Recalcular tokens
+                self._buffer_tokens = sum(self._estimate_tokens(e['user'] + e['assistant']) for e in self._buffer)
+                
+                log.info("✅ Compactação concluída! Buffer reduzido.", original=20, novo=len(self._buffer))
+            except Exception as e:
+                log.error("❌ Erro ao compactar buffer", error=str(e))
 
     async def flush(self):
         """Força salvamento do buffer atual"""

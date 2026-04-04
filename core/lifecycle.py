@@ -111,6 +111,10 @@ class OpenPY:
 
         # 10. Telegram Bot
         await self._init_telegram()
+        
+        # Injetar LLM router na Memória para Compactação (Fase 9)
+        if self.memory_manager and self.llm_router:
+            self.memory_manager.llm_router = self.llm_router
 
         self._running = True
         log.info("🚀 Open-PY pronto e operacional!")
@@ -210,6 +214,22 @@ class OpenPY:
         5. Salvar interação na memória
         """
         try:
+            # === FASE 9: COMANDO REMEMBER ===
+            if input_text.startswith("/remember"):
+                content = input_text[9:].strip()
+                if self.memory_manager:
+                    await self.memory_manager.save_memory(
+                        content=content,
+                        source="user",
+                        tags=["importante", "manual"],
+                        importance=10
+                    )
+                return {
+                    "response": f"✅ Memória salva com sucesso!\n\n_{content}_",
+                    "status": "completed",
+                    "task_id": None
+                }
+                
             # === DELEGAÇÃO FORÇADA POR INTENÇÃO (Fase 8: Confirmação) ===
             if user_id in self._pending_creations:
                 spec = self._pending_creations.pop(user_id)
