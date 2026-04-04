@@ -77,16 +77,16 @@ class OpenPY:
         # 5. Sistema de memória
         await self._init_memory()
 
-        # 6. Thinking Engine
+        # 6. Sistema de agentes
+        await self._init_agents()
+
+        # 7. Thinking Engine
         self.brain = ThinkingEngine(
             llm_router=self.llm_router,
             memory_manager=self.memory_manager,
             agent_registry=self.agent_registry,
         )
         log.info("✅ Thinking Engine pronto")
-
-        # 7. Sistema de agentes
-        await self._init_agents()
 
         # 8. Orchestrator (com audit log)
         from core.orchestrator import Orchestrator
