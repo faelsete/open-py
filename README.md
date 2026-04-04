@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL-3.0"></a>
-  <img src="https://img.shields.io/badge/version-3.1.0-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-3.2.0--Stable-green.svg" alt="Version">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/platform-Ubuntu%2022.04%2B-orange.svg" alt="Platform">
   <img src="https://img.shields.io/badge/PostgreSQL-16%2B-336791.svg" alt="PostgreSQL">
@@ -67,8 +67,9 @@ Open-PY é um framework autônomo que orquestra múltiplos agentes de IA especia
 | 📝 **Audit Log Imutável** | Chain SHA-256 (blockchain-style), append-only, verificação de integridade |
 | 🧠 **Auto-Learning** | Salva TUDO automaticamente, extrai e lembra preferências do usuário |
 | 🔐 **SYSTEM_SECURITY** | Bloco de segurança injetado em toda delegação — nunca truncado |
-| 🔄 **Multi-Provedor LLM** | OpenAI, Anthropic, OpenRouter, NVIDIA NIM, Custom (com fallback automático) |
-| 🩺 **Auto-Diagnóstico** | 14 checks de saúde + reparo automático via `/doctor` |
+| 🔄 **Multi-Provedor LLM** | OpenAI, Anthropic, OpenRouter, NVIDIA NIM, Custom (com timeouts de 60s e fallback) |
+| ⚡ **Async Processing** | TaskQueue com Workers dedicados e typing indicator sustentado |
+| 🩺 **Auto-Diagnóstico** | Checks de saúde + comandos `/doctor`, `/status` e `/debug` |
 | ⏰ **Scheduler** | Heartbeat, migração diária de memórias, cron jobs |
 | 🧬 **Identidade Persistente** | soul.md (memória inalterável) + essence.md (personalidade) com versionamento SHA-256 |
 

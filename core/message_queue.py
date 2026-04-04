@@ -213,6 +213,7 @@ class TaskQueue:
         self._workers: list[asyncio.Task] = []
         self._process_callback: Optional[Callable] = None
         self._task_counter = 0
+        self._active_tasks: dict[int, QueuedTask] = {}  # worker_id -> Task
 
         # Stats
         self._total_processed = 0
@@ -244,8 +245,12 @@ class TaskQueue:
             try:
                 priority, task = await self._queue.get()
 
-                async with self._running_lock:
-                    self._running_count += 1
+                try:
+                    async with self._running_lock:
+                        self._running_count += 1
+                        self._active_tasks[worker_id] = task
+                except Exception as ex:
+                    log.error("Erro ao registrar tarefa ativa", error=str(ex))
 
                 log.info("⚙️ Processando tarefa",
                          worker=worker_id,
@@ -269,6 +274,7 @@ class TaskQueue:
                 finally:
                     async with self._running_lock:
                         self._running_count -= 1
+                        self._active_tasks.pop(worker_id, None)
                     self._queue.task_done()
 
             except asyncio.CancelledError:
@@ -290,6 +296,10 @@ class TaskQueue:
         return {
             "queue_size": self._queue.qsize(),
             "running": self._running_count,
+            "running_details": [
+                {"id": t.task_id, "text": t.input_text[:50]} 
+                for t in self._active_tasks.values()
+            ],
             "total_enqueued": self._total_enqueued,
             "total_processed": self._total_processed,
         }

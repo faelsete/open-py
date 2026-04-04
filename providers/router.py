@@ -263,17 +263,19 @@ class LLMRouter:
         target_model = model or self._active_provider or self._model_names[0]
 
         try:
+            log.info(f"🚀 Chamada LLM: {target_model}")
             response = await self.router.acompletion(
                 model=target_model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                request_timeout=60,  # Timeout de 60s
                 **kwargs,
             )
             return response.choices[0].message.content
 
         except Exception as e:
-            log.warning(f"⚠️ Falha no provedor {target_model}", error=str(e))
+            log.warning(f"⚠️ Falha no provedor {target_model}: {str(e)}")
 
             # Tentar fallback para outros provedores
             for fallback in self._model_names:
@@ -286,10 +288,12 @@ class LLMRouter:
                         messages=messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
+                        request_timeout=60,  # Timeout no fallback também
                         **kwargs,
                     )
                     return response.choices[0].message.content
-                except Exception:
+                except Exception as ef:
+                    log.error(f"❌ Falha no fallback {fallback}: {str(ef)}")
                     continue
 
             raise NoProviderAvailableError(

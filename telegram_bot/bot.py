@@ -299,7 +299,15 @@ class TelegramBot:
             if not self._is_authorized(message.from_user.id):
                 return
             status = await self.core.get_system_status()
-            # Adicionar info de provedor ativo
+            
+            # Status da Fila (TaskQueue)
+            q_stats = self.queue.get_stats()
+            queue_info = f"📋 Fila: {q_stats['queue_size']} | Executando: {q_stats['running']}\n"
+            if q_stats["running_details"]:
+                for detail in q_stats["running_details"]:
+                    queue_info += f"   • {detail['text']}...\n"
+
+            # Info de provedor ativo
             provider_info = ""
             if self.core.llm_router:
                 info = self.core.llm_router.get_current_info()
@@ -312,7 +320,7 @@ class TelegramBot:
                 f"{provider_info}"
                 f"🧠 Memórias: {status['memory_count']}\n"
                 f"🤖 Agentes: {status['active_agents']}\n"
-                f"📋 Tarefas: {status['pending_tasks']}\n"
+                f"{queue_info}"
                 f"💾 RAM: {status['ram_used_pct']}%\n"
                 f"💿 Disco: {status['disk_used_pct']}%\n"
                 f"💓 Heartbeat: {status['last_heartbeat']}\n"
@@ -433,6 +441,31 @@ class TelegramBot:
             if not self._is_authorized(message.from_user.id):
                 return
             await message.reply(f"🎭 **Essence.md**\n\n{self.core._essence[:3000]}")
+
+        @self.dp.message(Command("debug"))
+        async def cmd_debug(message: types.Message):
+            if not self._is_authorized(message.from_user.id):
+                return
+            
+            # Coletar infos internas
+            q_stats = self.queue.get_stats()
+            b_stats = self.batcher.get_stats()
+            m_stats = await self.core.memory_manager.get_stats() if self.core.memory_manager else {}
+            
+            text = (
+                "🧪 **Diagnostic mode on**\n\n"
+                f"**Task Queue:**\n"
+                f"• Pendentes: {q_stats['queue_size']}\n"
+                f"• Processando: {q_stats['running']}\n"
+                f"• Total histórico: {q_stats['total_processed']}\n\n"
+                f"**Message Batcher:**\n"
+                f"• Chats ativos: {b_stats['pending_chats']}\n"
+                f"• Timers: {b_stats['active_timers']}\n\n"
+                f"**Memory Engine:**\n"
+                f"• Buffer: {m_stats.get('buffer_size', 0)} / 20\n"
+                f"• Last Compact: {m_stats.get('last_compact', 'Nunca')}\n"
+            )
+            await message.reply(text)
 
         # === AUDIT ===
         @self.dp.message(Command("audit"))
@@ -564,60 +597,73 @@ class TelegramBot:
 
     async def _process_batched_message(self, chat_id: int, msg_data: dict):
         """
-        Processa mensagem (ou batch de mensagens) após janela de 2s.
-        Chamado pelo MessageBatcher quando não há mais msgs chegando.
+        Versão Refatorada (Fase 10): Enfileira a tarefa na TaskQueue.
         """
         message = self._pending_replies.get(chat_id)
         if not message:
-            log.warning("⚠️ Sem mensagem de referência para reply", chat_id=chat_id)
             return
 
-        try:
-            await message.chat.do("typing")
+        input_text = msg_data.get("text", "")
+        user_id = msg_data.get("user_id", 0)
 
-            input_text = msg_data.get("text", "")
-            input_type = msg_data.get("input_type", "text")
-            user_id = msg_data.get("user_id", 0)
-            attachments = msg_data.get("attachments", [])
-
-            # Processar via Core
-            result = await self.core.process(
-                input_text=input_text,
-                input_type=input_type,
-                user_id=user_id,
-                attachments=attachments,
-            )
-
-            response = result.get("response", "Sem resposta")
-
-            # Auto-learning: salvar interação e extrair preferências
-            try:
-                await self.learner.learn_from_interaction(
-                    user_input=input_text,
-                    bot_response=response,
-                    user_id=user_id,
-                    input_type=input_type,
-                )
-            except Exception as e:
-                log.warning("⚠️ Erro no auto-learning", error=str(e))
-
-            # Enviar resposta
+        # Definir callback para processar o resultado
+        async def on_complete(result: dict):
+            response = result.get("response", "⚠️ Sem resposta do core.")
             await self._send_long_message(message, response)
+            
+            # Learner (background)
+            asyncio.create_task(self.learner.learn_from_interaction(
+                user_input=input_text,
+                bot_response=response,
+                user_id=user_id,
+                input_type=msg_data.get("input_type", "text")
+            ))
 
-            # Log de batch se aplicável
-            if msg_data.get("is_batch"):
-                log.info("📦 Batch processado",
-                         chat_id=chat_id,
-                         batch_size=msg_data.get("batch_size", 1))
+        # Criar tarefa para a fila
+        from core.message_queue import QueuedTask, Priority
+        import uuid
+        
+        task = QueuedTask(
+            task_id=f"msg-{uuid.uuid4().hex[:8]}",
+            priority=Priority.NORMAL,
+            input_text=input_text,
+            input_type=msg_data.get("input_type", "text"),
+            attachments=msg_data.get("attachments", []),
+            user_id=user_id,
+            callback=on_complete
+        )
 
-        except Exception as e:
-            log.error("❌ Erro processando batch", error=str(e))
+        # Typing sustentado
+        async def typing_loop():
             try:
-                await message.reply("⚠️ Erro interno ao processar sua mensagem.")
+                # Enquanto a tarefa existir em running ou queue
+                found = True
+                while found:
+                    stats = self.queue.get_stats()
+                    found = any(t["id"] == task.task_id for t in stats["running_details"]) or \
+                            stats["queue_size"] > 0 # Simplificado
+                    
+                    if not found: break
+                    await message.chat.do("typing")
+                    await asyncio.sleep(5)
             except Exception:
                 pass
-        finally:
-            self._pending_replies.pop(chat_id, None)
+
+        asyncio.create_task(typing_loop())
+        await self.queue.enqueue(task)
+
+    async def _core_processor(self, task: QueuedTask) -> dict:
+        """Chamado pela TaskQueue para processar a tarefa no Core"""
+        try:
+            return await self.core.process(
+                input_text=task.input_text,
+                input_type=task.input_type,
+                user_id=task.user_id,
+                attachments=task.attachments,
+            )
+        except Exception as e:
+            log.error("Erro no Core Processor", error=str(e))
+            return {"response": f"❌ Erro interno: {str(e)}", "status": "error"}
 
     # ============================================
     # AUTH
