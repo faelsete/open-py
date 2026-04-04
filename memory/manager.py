@@ -105,7 +105,7 @@ class MemoryManager:
     # ============================================
 
     async def buffer_interaction(self, user_input: str, response: str):
-        """Adiciona interação ao buffer de contexto"""
+        """Adiciona interação ao buffer de contexto + salva direto no PostgreSQL"""
         entry = {
             "timestamp": datetime.now().isoformat(),
             "user": user_input,
@@ -114,10 +114,30 @@ class MemoryManager:
         self._buffer.append(entry)
         self._buffer_tokens += self._estimate_tokens(user_input + response)
 
-        # Verificar se deve salvar
+        # === SALVAR DIRETO NO POSTGRESQL (cada interação) ===
+        # Isso garante que NADA se perde, mesmo com crash
+        if self.db:
+            try:
+                content = f"User: {user_input}\n\nAssistant: {response}"
+                tags = self._extract_tags(content)
+                embedding = await self._get_embedding(content[:2000])
+
+                await self.db.execute("""
+                    INSERT INTO memories (content, content_type, source, tags,
+                                          embedding, importance, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """, content, "interaction", "core", tags, embedding, 5,
+                     json.dumps({"type": "realtime", "ts": entry["timestamp"]}))
+
+                log.debug("💾 Interação salva no PostgreSQL em tempo real")
+            except Exception as e:
+                log.warning("⚠️ Erro salvando interação no PostgreSQL", error=str(e))
+
+        # Verificar se deve salvar buffer para .md (backup local)
         should_save = (
+            len(self._buffer) >= 10 or  # A cada 10 interações
             self._buffer_tokens >= self.config.context_max_tokens or
-            self._minutes_since_last_save() >= self.config.context_save_interval_minutes
+            self._minutes_since_last_save() >= 15  # A cada 15 minutos
         )
 
         if should_save:
@@ -251,6 +271,40 @@ class MemoryManager:
         """, content, content_type, source, all_tags, embedding, importance)
 
         log.info("💾 Memória salva no PostgreSQL", type=content_type, tags=all_tags)
+
+    # ============================================
+    # BUSCA NO BUFFER (RAM) — Curto prazo
+    # ============================================
+
+    def search_buffer(self, query: str, limit: int = 5) -> list[dict]:
+        """Busca keyword simples no buffer RAM"""
+        query_lower = query.lower()
+        results = []
+        for entry in reversed(self._buffer):  # Mais recentes primeiro
+            combined = f"{entry.get('user', '')} {entry.get('assistant', '')}".lower()
+            if query_lower in combined:
+                results.append({
+                    "content": f"User: {entry['user']}\nAssistant: {entry['assistant']}",
+                    "tags": ["buffer", "recent"],
+                    "importance": 7,  # Recente = mais importante
+                    "created_at": entry.get("timestamp", ""),
+                })
+                if len(results) >= limit:
+                    break
+        return results
+
+    def get_recent_buffer(self, limit: int = 5) -> list[dict]:
+        """Retorna as N interações mais recentes do buffer"""
+        recent = self._buffer[-limit:] if self._buffer else []
+        return [
+            {
+                "content": f"User: {e['user']}\nAssistant: {e['assistant']}",
+                "tags": ["buffer", "recent"],
+                "importance": 7,
+                "created_at": e.get("timestamp", ""),
+            }
+            for e in reversed(recent)
+        ]
 
     # ============================================
     # BUSCA (4 MODOS)

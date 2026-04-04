@@ -76,10 +76,11 @@ class Orchestrator:
         self._fallback_stats: dict[str, int] = defaultdict(int)  # agent → fallback count
 
     async def dispatch(self, thinking: ThinkingResult,
-                       attachments: list[str] = None) -> AgentResult:
+                       attachments: list[str] = None,
+                       conversation_history: list[dict] = None) -> AgentResult:
         """
         Despacha uma tarefa baseado no resultado do Thinking Engine.
-        Inclui fallback routing e retry.
+        Inclui fallback routing, context injection e retry.
         """
         if not thinking.target_agent:
             return AgentResult(
@@ -90,10 +91,11 @@ class Orchestrator:
 
         log.info("🔀 Despachando tarefa",
                  agent=thinking.target_agent,
-                 task_id=thinking.task_id)
+                 task_id=thinking.task_id,
+                 history_msgs=len(conversation_history or []))
 
-        # Montar tarefa com context compression
-        task = self._build_task(thinking, attachments)
+        # Montar tarefa com context compression + histórico
+        task = self._build_task(thinking, attachments, conversation_history)
 
         # Tentar executar com fallback chain
         agents_to_try = [thinking.target_agent] + FALLBACK_ROUTES.get(
@@ -265,15 +267,16 @@ Você é um agente do Open-PY. Regras invioláveis:
 [/SECURITY BLOCK]"""
 
     def _build_task(self, thinking: ThinkingResult,
-                    attachments: list[str] = None) -> AgentTask:
+                    attachments: list[str] = None,
+                    conversation_history: list[dict] = None) -> AgentTask:
         """
-        Monta tarefa com context compression SEGURA.
+        Monta tarefa com context compression SEGURA + histórico conversacional.
         
-        Estratégia (recomendação do Ori):
+        Estratégia:
         - SYSTEM_SECURITY: bloco estático, NUNCA comprimido
+        - HISTÓRICO: últimas 5-10 mensagens da conversa para contexto
         - Contexto: apenas metadados essenciais (reason, urgency, tools)
         - Input: comprimir apenas histórico de tarefas, preservar a tarefa atual
-        - Rebuild: SEGURANÇA (verbatim) + RESUMO_HIERÁRQUICO + TAREFA_ATUAL
         """
         # Comprimir contexto: só enviar o necessário
         context = {}
@@ -287,8 +290,6 @@ Você é um agente do Open-PY. Regras invioláveis:
         # Compression segura do input
         raw_input = thinking.raw_input
         if len(raw_input) > 4000:
-            # Preservar início (instrução principal) e final (tarefa mais recente)
-            # Cortar apenas o meio (histórico antigo)
             preserved_start = raw_input[:1500]
             preserved_end = raw_input[-1500:]
             raw_input = (
@@ -297,8 +298,22 @@ Você é um agente do Open-PY. Regras invioláveis:
                 preserved_end
             )
 
-        # Montar tarefa com bloco de segurança SEMPRE presente
-        full_task = f"{self.SYSTEM_SECURITY}\n\n{raw_input}"
+        # === INJEÇÃO DE HISTÓRICO CONVERSACIONAL ===
+        # Para o agente entender "corrija isso", "continue aquilo", etc.
+        history_block = ""
+        if conversation_history:
+            history_block = "\n## Histórico recente da conversa:\n"
+            for msg in conversation_history[-10:]:
+                role = "Usuário" if msg["role"] == "user" else "Assistente"
+                content = msg["content"]
+                # Truncar mensagens muito longas no histórico
+                if len(content) > 500:
+                    content = content[:500] + "..."
+                history_block += f"**{role}**: {content}\n\n"
+            history_block += "---\n"
+
+        # Montar tarefa: SEGURANÇA + HISTÓRICO + TAREFA ATUAL
+        full_task = f"{self.SYSTEM_SECURITY}\n\n{history_block}\n## Tarefa atual:\n{raw_input}"
 
         return AgentTask(
             task_id=thinking.task_id or f"TASK-{datetime.now().strftime('%H%M%S')}",

@@ -203,6 +203,27 @@ sudo bash install.sh
 openpy update
 ```
 
+### ☢️ Limpeza Nuclear (Nuclear Reset)
+
+Se você precisar **apagar TUDO** (memórias, banco de dados, identidades e configurações) e começar do zero, use um dos comandos abaixo:
+
+**Via Terminal (Recomendado):**
+
+```bash
+openpy nuke
+```
+
+O sistema pedirá **duas confirmações**: primeiro digite `NUKE`, depois `SIM`.
+
+**Via One-liner (Fora do sistema):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/faelsete/open-py/main/nuke.sh | sudo bash
+```
+
+> [!CAUTION]
+> Isso irá destruir permanentemente: Banco de dados, memórias, `soul.md`, `essence.md` e `openpy.toml`. Use com cuidado!
+
 ### O que o instalador faz (8 etapas automáticas)
 
 ```

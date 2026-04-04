@@ -23,6 +23,10 @@ from core.brain import ThinkingEngine, build_core_system_prompt
 log = get_logger("lifecycle")
 
 
+# Máximo de trocas de mensagem (user+assistant) por usuário mantidas em RAM
+MAX_CONVERSATION_TURNS = 20
+
+
 class OpenPY:
     """
     Classe principal do sistema Open-PY.
@@ -43,6 +47,10 @@ class OpenPY:
         self._running = False
         self._soul = ""
         self._essence = ""
+
+        # Histórico conversacional por usuário (RAM)
+        # Chave: user_id (int) → Valor: lista de {role, content}
+        self._conversation_histories: dict[int, list[dict]] = {}
 
     # ============================================
     # STARTUP
@@ -213,11 +221,27 @@ class OpenPY:
             attachments=attachments,
         )
 
-        # Se tem agente alvo, delegar
+        # Obter histórico conversacional do usuário
+        history = self._get_conversation_history(user_id)
+
+        # Se tem agente alvo, delegar COM CONTEXTO
         if thinking.target_agent:
-            result = await self.orchestrator.dispatch(thinking, attachments)
+            result = await self.orchestrator.dispatch(
+                thinking, attachments,
+                conversation_history=history[-10:]  # Últimas 5 trocas para o agente
+            )
+
+            # Salvar no histórico conversacional
+            response_text = result.output or result.error or "Sem resultado"
+            self._add_to_conversation(user_id, "user", input_text)
+            self._add_to_conversation(user_id, "assistant", response_text)
+
+            # Salvar na memória de longo prazo
+            if self.memory_manager:
+                await self.memory_manager.buffer_interaction(input_text, response_text)
+
             return {
-                "response": result.output or result.error or "Sem resultado",
+                "response": response_text,
                 "task_id": result.task_id,
                 "status": result.status.value,
                 "delegated_to": thinking.target_agent,
@@ -225,9 +249,7 @@ class OpenPY:
 
         # Senão, Core responde diretamente via LLM
         if self.llm_router:
-            # === MEMÓRIA SEMÂNTICA ===
-            # Buscar APENAS memórias relevantes ao input atual
-            # Como um cérebro humano: perguntou sobre pão → só lembra de culinária
+            # === MEMÓRIA SEMÂNTICA (longo prazo) ===
             semantic_context = ""
             if self.memory_manager:
                 semantic_context = await self._build_semantic_context(
@@ -240,14 +262,21 @@ class OpenPY:
             if semantic_context:
                 system_prompt += f"\n\n{semantic_context}"
 
-            response = await self.llm_router.complete(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": input_text},
-                ],
-            )
+            # === HISTÓRICO CONVERSACIONAL (curto prazo) ===
+            # Injetar histórico entre system e user para manter contexto
+            messages = [
+                {"role": "system", "content": system_prompt},
+                *history,  # Últimas N trocas de mensagem
+                {"role": "user", "content": input_text},
+            ]
 
-            # Salvar interação na memória (auto-save de tudo)
+            response = await self.llm_router.complete(messages=messages)
+
+            # Salvar no histórico conversacional (RAM)
+            self._add_to_conversation(user_id, "user", input_text)
+            self._add_to_conversation(user_id, "assistant", response)
+
+            # Salvar na memória de longo prazo (buffer → md → PostgreSQL)
             if self.memory_manager:
                 await self.memory_manager.buffer_interaction(input_text, response)
 
@@ -255,15 +284,54 @@ class OpenPY:
 
         return {"response": "⚠️ Nenhum provedor LLM configurado. Use /config.", "status": "error"}
 
+    # ============================================
+    # HISTÓRICO CONVERSACIONAL (Curto Prazo — RAM)
+    # ============================================
+
+    def _get_conversation_history(self, user_id: int = None) -> list[dict]:
+        """
+        Retorna o histórico conversacional do usuário.
+        Formato: lista de {"role": "user"|"assistant", "content": "..."}
+        """
+        if user_id is None:
+            return []
+        return self._conversation_histories.get(user_id, [])
+
+    def _add_to_conversation(self, user_id: int, role: str, content: str):
+        """
+        Adiciona uma mensagem ao histórico conversacional do usuário.
+        Mantém apenas as últimas MAX_CONVERSATION_TURNS trocas.
+        """
+        if user_id is None:
+            return
+
+        if user_id not in self._conversation_histories:
+            self._conversation_histories[user_id] = []
+
+        self._conversation_histories[user_id].append({
+            "role": role,
+            "content": content,
+        })
+
+        # Limitar tamanho: cada troca = 2 mensagens (user + assistant)
+        max_msgs = MAX_CONVERSATION_TURNS * 2
+        if len(self._conversation_histories[user_id]) > max_msgs:
+            self._conversation_histories[user_id] = \
+                self._conversation_histories[user_id][-max_msgs:]
+
+    def clear_conversation(self, user_id: int):
+        """Limpa o histórico conversacional de um usuário"""
+        self._conversation_histories.pop(user_id, None)
+
     async def _build_semantic_context(self, query: str, user_id: int = None,
                                        max_tokens: int = 2000) -> str:
         """
         Busca semântica de memórias relevantes ao input atual.
         
-        Funciona como um cérebro humano:
-        - Se perguntou sobre "Python" → busca memórias de programação
-        - Se perguntou sobre "jantar" → busca memórias de culinária
-        - NUNCA carrega 1M de tokens — só o necessário
+        3 fontes (prioridade):
+        1. Buffer RAM (últimas interações — mais frescas)
+        2. PostgreSQL via busca híbrida (longo prazo — mais amplas)
+        3. Preferências do usuário (sempre úteis)
         
         Budget máximo: ~2000 tokens (≈8000 chars)
         """
@@ -272,29 +340,38 @@ class OpenPY:
         chars_used = 0
 
         try:
-            # 1. Busca híbrida: keyword + semântica (pgvector)
+            # 1. BUFFER RAM — Interações muito recentes (sempre disponíveis)
+            buffer_results = self.memory_manager.search_buffer(query, limit=3)
+            if buffer_results:
+                context_parts.append("## Memórias recentes (sessão atual)")
+                for mem in buffer_results:
+                    content = mem.get("content", "")
+                    if len(content) > 300:
+                        content = content[:300] + "..."
+                    if chars_used + len(content) > char_budget:
+                        break
+                    chars_used += len(content)
+                    context_parts.append(f"- {content}")
+
+            # 2. PostgreSQL — Busca híbrida: keyword + semântica (pgvector)
             results = await self.memory_manager.search(
                 query, mode="hybrid", limit=8
             )
 
             if results:
-                context_parts.append("## Memórias relevantes (recuperação semântica)")
+                context_parts.append("\n## Memórias de longo prazo (recuperação semântica)")
                 for mem in results:
                     content = mem.get("content", "")
-                    # Truncar individual se muito longo
                     if len(content) > 300:
                         content = content[:300] + "..."
-                    
-                    # Verificar budget
                     if chars_used + len(content) > char_budget:
                         break
-                    
                     chars_used += len(content)
                     tags = mem.get("tags", [])
                     tag_str = f" [{', '.join(tags[:3])}]" if tags else ""
                     context_parts.append(f"- {content}{tag_str}")
 
-            # 2. Buscar preferências do usuário (sempre úteis)
+            # 3. Preferências do usuário (sempre úteis)
             if user_id and chars_used < char_budget * 0.7:
                 prefs = await self.memory_manager.search(
                     f"PREFERÊNCIA user:{user_id}",
@@ -482,7 +559,7 @@ class OpenPY:
             self.memory_manager = None
 
     async def _init_agents(self):
-        """Inicializa registry e factory de agentes"""
+        """Inicializa registry, factory e cria agentes builtin"""
         try:
             from agents.registry import AgentRegistry
             from agents.factory import AgentFactory
@@ -492,7 +569,12 @@ class OpenPY:
                 config=self.config,
                 llm_router=self.llm_router,
             )
-            log.info("✅ Sistema de agentes pronto")
+
+            # CRIAR TODOS OS AGENTES BUILTIN NO STARTUP
+            await self.agent_factory.create_all_builtins()
+
+            agents = self.agent_registry.list_all()
+            log.info(f"✅ Sistema de agentes pronto — {len(agents)} agentes ativos")
         except Exception as e:
             log.warning("⚠️ Erro no sistema de agentes", error=str(e))
 

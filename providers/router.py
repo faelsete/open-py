@@ -19,50 +19,59 @@ class LLMRouter:
     Suporta adição/remoção/troca de provedores em runtime.
     """
 
+    # Modelos padrão por provedor (sem prefixo LiteLLM)
+    DEFAULT_MODELS = {
+        "openai": "gpt-4o-mini",
+        "anthropic": "claude-sonnet-4-20250514",
+        "openrouter": "qwen/qwen3-235b-a22b:free",
+        "nvidia": "nvidia-model",
+        "opencode": "custom-model",
+    }
+
+    # Prefixos exigidos pelo LiteLLM para cada provedor
+    LITELLM_PREFIXES = {
+        "openai": "",           # OpenAI não precisa de prefixo
+        "anthropic": "",        # Anthropic não precisa de prefixo
+        "openrouter": "openrouter/",
+        "nvidia": "openai/",    # NVIDIA usa endpoint OpenAI-compatible
+        "opencode": "openai/",  # Custom endpoint OpenAI-compatible
+    }
+
     def __init__(self, config: OpenPYConfig):
         self.config = config
         self._model_list = []
         self._active_provider: str = ""
-        self._active_model: str = config.core.default_model or ""
+        self._active_model: str = ""
 
-        # Mapeamento provedor → modelo atual
+        # Mapeamento provedor → modelo LiteLLM completo (com prefixo)
         self._provider_models: dict[str, str] = {}
 
-        # OpenAI
-        p = config.providers.openai
-        if p.enabled and p.api_key:
-            self._add_to_list("openai", config.core.default_model or "gpt-4o-mini", p.api_key)
+        # Inicializar cada provedor com seu modelo específico
+        providers_map = {
+            "openai": config.providers.openai,
+            "anthropic": config.providers.anthropic,
+            "openrouter": config.providers.openrouter,
+            "nvidia": config.providers.nvidia,
+            "opencode": config.providers.opencode,
+        }
 
-        # Anthropic
-        p = config.providers.anthropic
-        if p.enabled and p.api_key:
-            self._add_to_list("anthropic", config.core.default_model or "claude-sonnet-4-20250514", p.api_key)
+        for name, p in providers_map.items():
+            if not (p.enabled and p.api_key):
+                continue
+            if name == "opencode" and not p.api_base:
+                continue
 
-        # OpenRouter
-        p = config.providers.openrouter
-        if p.enabled and p.api_key:
-            model = config.core.default_model or "anthropic/claude-sonnet-4"
-            self._add_to_list("openrouter", f"openrouter/{model}", p.api_key)
+            # Modelo: prioridade → p.model > config.core.default_model > DEFAULT
+            raw_model = p.model or self.DEFAULT_MODELS.get(name, "")
+            litellm_model = self._apply_prefix(name, raw_model)
 
-        # NVIDIA NIM
-        p = config.providers.nvidia
-        if p.enabled and p.api_key:
-            self._add_to_list(
-                "nvidia",
-                f"openai/{config.core.default_model or 'nvidia-model'}",
-                p.api_key,
-                api_base=p.api_base or "https://integrate.api.nvidia.com/v1",
-            )
+            kwargs = {}
+            if name == "nvidia":
+                kwargs["api_base"] = p.api_base or "https://integrate.api.nvidia.com/v1"
+            elif name == "opencode":
+                kwargs["api_base"] = p.api_base
 
-        # OpenCode (custom endpoint)
-        p = config.providers.opencode
-        if p.enabled and p.api_key and p.api_base:
-            self._add_to_list(
-                "opencode",
-                f"openai/{config.core.default_model or 'custom-model'}",
-                p.api_key,
-                api_base=p.api_base,
-            )
+            self._add_to_list(name, litellm_model, p.api_key, **kwargs)
 
         self._rebuild_router()
 
@@ -102,6 +111,27 @@ class LLMRouter:
         log.info(f"✅ LLM Router pronto com {len(self._model_list)} provedores: {self._model_names}")
 
     # ============================================
+    # PREFIXAÇÃO — Lógica centralizada
+    # ============================================
+
+    def _apply_prefix(self, provider_name: str, raw_model: str) -> str:
+        """Aplica prefixo LiteLLM ao modelo, SEM duplicar"""
+        prefix = self.LITELLM_PREFIXES.get(provider_name, "")
+        if not prefix:
+            return raw_model
+        # Evitar prefixo duplicado
+        if raw_model.startswith(prefix):
+            return raw_model
+        return f"{prefix}{raw_model}"
+
+    def _strip_prefix(self, provider_name: str, model: str) -> str:
+        """Remove prefixo LiteLLM para obter o modelo limpo"""
+        prefix = self.LITELLM_PREFIXES.get(provider_name, "")
+        if prefix and model.startswith(prefix):
+            return model[len(prefix):]
+        return model
+
+    # ============================================
     # GERENCIAMENTO DINÂMICO
     # ============================================
 
@@ -115,34 +145,27 @@ class LLMRouter:
         if name in self._provider_models:
             return {"ok": False, "message": f"Provedor '{name}' já existe. Use /provider {name} para ativar."}
 
-        # Definir modelo padrão por provedor
-        default_models = {
-            "openai": "gpt-4o-mini",
-            "anthropic": "claude-sonnet-4-20250514",
-            "openrouter": "openrouter/qwen/qwen3-235b-a22b:free",
-            "nvidia": "openai/nvidia-model",
-            "opencode": "openai/custom-model",
-        }
+        # Modelo: argumento > default do provedor > genérico
+        raw_model = model or self.DEFAULT_MODELS.get(name, f"{name}-model")
+        clean_model = self._strip_prefix(name, raw_model)
+        litellm_model = self._apply_prefix(name, clean_model)
 
-        llm_model = model or default_models.get(name, f"openai/{name}")
-
-        # Se for openrouter e modelo não tem prefixo, adicionar
-        if name == "openrouter" and not llm_model.startswith("openrouter/"):
-            llm_model = f"openrouter/{llm_model}"
-
-        self._add_to_list(name, llm_model, api_key, api_base)
+        self._add_to_list(name, litellm_model, api_key, api_base)
         self._rebuild_router()
 
         # Persistir no config
         try:
-            provider_cfg = ProviderConfig(api_key=api_key, api_base=api_base or "", enabled=True)
+            provider_cfg = ProviderConfig(
+                api_key=api_key, api_base=api_base or "",
+                enabled=True, model=clean_model,
+            )
             if hasattr(self.config.providers, name):
                 setattr(self.config.providers, name, provider_cfg)
                 save_config(self.config)
         except Exception as e:
             log.warning("Config save failed", error=str(e))
 
-        return {"ok": True, "message": f"✅ Provedor '{name}' adicionado com modelo '{llm_model}'"}
+        return {"ok": True, "message": f"✅ Provedor '{name}' adicionado com modelo '{litellm_model}'"}
 
     def remove_provider(self, name: str) -> dict:
         """Remove provedor em runtime"""
@@ -175,30 +198,33 @@ class LLMRouter:
         if target not in self._provider_models:
             return {"ok": False, "message": f"Provedor '{target}' não encontrado."}
 
-        # Aplicar prefixo se necessário
-        if target == "openrouter" and not model.startswith("openrouter/"):
-            model = f"openrouter/{model}"
-        elif target in ("nvidia", "opencode") and not model.startswith("openai/"):
-            model = f"openai/{model}"
+        # Guardar modelo limpo (sem prefixo) para persistência
+        clean_model = self._strip_prefix(target, model)
+
+        # Aplicar prefixo LiteLLM
+        litellm_model = self._apply_prefix(target, clean_model)
 
         # Atualizar na lista
         for entry in self._model_list:
             if entry["model_name"] == target:
-                entry["litellm_params"]["model"] = model
+                entry["litellm_params"]["model"] = litellm_model
                 break
 
-        self._provider_models[target] = model
-        self._active_model = model
+        self._provider_models[target] = litellm_model
+        self._active_model = litellm_model
         self._rebuild_router()
 
-        # Persistir
+        # Persistir PER-PROVIDER (não global)
         try:
-            self.config.core.default_model = model
-            save_config(self.config)
+            if hasattr(self.config.providers, target):
+                provider_cfg = getattr(self.config.providers, target)
+                provider_cfg.model = clean_model  # Salva SEM prefixo
+                save_config(self.config)
+                log.info(f"💾 Modelo salvo para {target}: {clean_model}")
         except Exception as e:
             log.warning("Config save failed", error=str(e))
 
-        return {"ok": True, "message": f"✅ Modelo do **{target}** alterado para: `{model}`"}
+        return {"ok": True, "message": f"✅ Modelo do **{target}** alterado para: `{litellm_model}`"}
 
     def list_providers(self) -> list[dict]:
         """Lista todos os provedores configurados"""

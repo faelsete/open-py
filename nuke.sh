@@ -40,9 +40,9 @@ if [[ "$confirmation" != "NUKE" ]]; then
     exit 0
 fi
 
-echo -e "${YELLOW}Tem CERTEZA? Digite ${BOLD}SIM, DESTRUIR TUDO${NC}${YELLOW}:${NC}"
+echo -e "${YELLOW}Tem CERTEZA? Digite ${BOLD}SIM${NC}${YELLOW} para confirmar:${NC}"
 read -r confirmation2
-if [[ "$confirmation2" != "SIM, DESTRUIR TUDO" ]]; then
+if [[ "$confirmation2" != "SIM" ]]; then
     echo -e "${GREEN}Cancelado. Nada foi alterado.${NC}"
     exit 0
 fi

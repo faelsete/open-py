@@ -60,6 +60,7 @@ class ProviderConfig(BaseModel):
     api_key: str = ""
     api_base: str = ""
     enabled: bool = False
+    model: str = ""  # Modelo específico deste provedor (sem prefixo LiteLLM)
 
 
 class ProvidersConfig(BaseModel):
