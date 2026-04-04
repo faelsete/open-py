@@ -125,8 +125,8 @@ class MemoryManager:
                 await self.db.execute("""
                     INSERT INTO memories (content, content_type, source, tags,
                                           embedding, importance, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """, content, "interaction", "core", tags, embedding, 5,
+                    VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
+                """, content, "interaction", "core", tags, self._format_embedding(embedding), 5,
                      json.dumps({"type": "realtime", "ts": entry["timestamp"]}))
 
                 log.debug("💾 Interação salva no PostgreSQL em tempo real")
@@ -229,8 +229,8 @@ class MemoryManager:
                 await self.db.execute("""
                     INSERT INTO memories (content, content_type, source, tags,
                                           embedding, importance, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """, content, "interaction", "core", tags, embedding, 5,
+                    VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
+                """, content, "interaction", "core", tags, self._format_embedding(embedding), 5,
                      json.dumps({"source_file": filepath.name, "date": file_date}))
 
                 # Descartar md após migração bem-sucedida
@@ -257,20 +257,23 @@ class MemoryManager:
             log.warning("⚠️ Sem banco — memória não salva")
             return
 
-        tags = tags or []
-        embedding = await self._get_embedding(content)
+        try:
+            tags = tags or []
+            embedding = await self._get_embedding(content)
 
-        # Auto-tags
-        auto_tags = self._extract_tags(content)
-        all_tags = list(set(tags + auto_tags))
+            # Auto-tags
+            auto_tags = self._extract_tags(content)
+            all_tags = list(set(tags + auto_tags))
 
-        await self.db.execute("""
-            INSERT INTO memories (content, content_type, source, tags,
-                                  embedding, importance)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        """, content, content_type, source, all_tags, embedding, importance)
+            await self.db.execute("""
+                INSERT INTO memories (content, content_type, source, tags,
+                                      embedding, importance)
+                VALUES ($1, $2, $3, $4, $5::vector, $6)
+            """, content, content_type, source, all_tags, self._format_embedding(embedding), importance)
 
-        log.info("💾 Memória salva no PostgreSQL", type=content_type, tags=all_tags)
+            log.info("💾 Memória salva no PostgreSQL", type=content_type, tags=all_tags)
+        except Exception as e:
+            log.warning("⚠️ Erro salvando memória no PostgreSQL", error=str(e))
 
     # ============================================
     # BUSCA NO BUFFER (RAM) — Curto prazo
@@ -348,10 +351,10 @@ class MemoryManager:
 
         rows = await self.db.fetch("""
             SELECT id, content, tags, importance, created_at,
-                   1 - (embedding <=> $1) AS similarity
+                   1 - (embedding <=> $1::vector) AS similarity
             FROM memories WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> $1 LIMIT $2
-        """, str(embedding), limit)
+            ORDER BY embedding <=> $1::vector LIMIT $2
+        """, self._format_embedding(embedding), limit)
         return [dict(r) for r in rows]
 
     async def _search_hybrid(self, query: str, limit: int) -> list[dict]:
@@ -361,13 +364,13 @@ class MemoryManager:
 
         rows = await self.db.fetch("""
             SELECT id, content, tags, importance, created_at,
-                   (1 - (embedding <=> $1)) AS similarity
+                   (1 - (embedding <=> $1::vector)) AS similarity
             FROM memories
             WHERE content ILIKE '%' || $2 || '%'
-               OR (embedding IS NOT NULL AND embedding <=> $1 < 0.7)
+               OR (embedding IS NOT NULL AND embedding <=> $1::vector < 0.7)
             ORDER BY similarity DESC NULLS LAST
             LIMIT $3
-        """, str(embedding), query, limit)
+        """, self._format_embedding(embedding), query, limit)
         return [dict(r) for r in rows]
 
     # ============================================
@@ -398,6 +401,12 @@ class MemoryManager:
     # ============================================
     # HELPERS
     # ============================================
+
+    def _format_embedding(self, emb: list[float]) -> Optional[str]:
+        """Converte list[float] para string '[0.1, 0.2, ...]' compatível com pgvector"""
+        if emb is None:
+            return None
+        return '[' + ','.join(str(x) for x in emb) + ']'
 
     def _estimate_tokens(self, text: str) -> int:
         """Estimativa rápida: 1 token ≈ 4 caracteres"""
