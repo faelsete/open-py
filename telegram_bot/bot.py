@@ -611,9 +611,15 @@ class TelegramBot:
                          batch_size=msg_data.get("batch_size", 1))
 
         except Exception as e:
-            log.error("❌ Erro processando batch", error=str(e))
+            import traceback
+            error_detail = traceback.format_exc()
+            log.error("❌ Erro processando batch",
+                      error=str(e),
+                      chat_id=chat_id,
+                      traceback=error_detail)
             try:
-                await message.reply("⚠️ Erro interno ao processar sua mensagem.")
+                error_msg = f"⚠️ Erro interno: {str(e)[:200]}\n\nSe persistir, tente /start."
+                await message.reply(error_msg)
             except Exception:
                 pass
         finally:
