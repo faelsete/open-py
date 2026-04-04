@@ -17,7 +17,7 @@ VENV_DIR="$INSTALL_DIR/venv"
 DATA_DIR="$INSTALL_DIR/data"
 CONFIG_FILE="$INSTALL_DIR/openpy.toml"
 LOG_FILE="/var/log/open-py-install.log"
-OPENPY_VERSION="2.2.0"
+OPENPY_VERSION="3.2.0-STABLE"
 ERRORS=0
 
 # ════════════════ CORES ════════════════
