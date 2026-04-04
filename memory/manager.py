@@ -201,6 +201,7 @@ class MemoryManager:
     async def migrate_daily(self):
         """
         Migração diária: memory.md → PostgreSQL → descarte md
+        Compila TODOS os .md do dia anterior em UM ÚNICO INSERT no DB.
         Chamada pelo scheduler às 00:00 (configurável)
         """
         if not self.db:
@@ -220,39 +221,48 @@ class MemoryManager:
             log.info("Nenhum arquivo para migrar")
             return
 
-        log.info(f"📦 Migrando {len(files_to_migrate)} arquivos para PostgreSQL")
+        log.info(f"📦 Compilando {len(files_to_migrate)} arquivos para migração")
 
-        for filepath in files_to_migrate:
+        # Agrupar arquivos por data (YYYY-MM-DD)
+        files_by_date = {}
+        for f in files_to_migrate:
+            file_date = f.stem.split("_")[0]
+            if file_date not in files_by_date:
+                files_by_date[file_date] = []
+            files_by_date[file_date].append(f)
+
+        for date_str, date_files in files_by_date.items():
+            compiled_content = ""
+            all_tags = set()
+            
             try:
-                async with aiofiles.open(filepath, "r", encoding="utf-8") as f:
-                    content = await f.read()
+                for filepath in sorted(date_files):
+                    async with aiofiles.open(filepath, "r", encoding="utf-8") as f:
+                        content = await f.read()
+                        compiled_content += f"\n\n=== {filepath.name} ===\n\n{content}"
+                        all_tags.update(self._extract_tags(content))
 
-                # Gerar embedding
-                embedding = await self._get_embedding(content[:2000])
+                # Gerar embedding limitando aos primeiros 2000 chars da string compilada
+                embedding = await self._get_embedding(compiled_content[:2000])
 
-                # Extrair date do nome do arquivo
-                file_date = filepath.stem.split("_")[0]
-
-                # Auto-gerar tags
-                tags = self._extract_tags(content)
-
-                # Salvar no PostgreSQL
+                # Salvar no PostgreSQL em um único INSERT para o dia inteiro
                 await self.db.execute("""
                     INSERT INTO memories (content, content_type, source, tags,
                                           embedding, importance, metadata)
                     VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
-                """, content, "interaction", "core", tags, self._format_embedding(embedding), 5,
-                     json.dumps({"source_file": filepath.name, "date": file_date}))
+                """, compiled_content, "daily_compilation", "core", list(all_tags), self._format_embedding(embedding), 6,
+                     json.dumps({"source_files_count": len(date_files), "date": date_str}))
 
-                # Descartar md após migração bem-sucedida
+                # Descartar md após migração bem-sucedida do dia
                 if self.config.discard_md_after_migration:
-                    os.remove(filepath)
-                    log.info(f"🗑️ {filepath.name} migrado e descartado")
+                    for filepath in date_files:
+                        os.remove(filepath)
+                    log.info(f"🗑️ Buffer do dia {date_str} ({len(date_files)} arquivos) migrado e descartado")
                 else:
-                    log.info(f"📦 {filepath.name} migrado (md mantido)")
+                    log.info(f"📦 Buffer do dia {date_str} ({len(date_files)} arquivos) migrado (md mantido)")
 
             except Exception as e:
-                log.error(f"❌ Erro migrando {filepath.name}", error=str(e))
+                log.error(f"❌ Erro migrando buffer do dia {date_str}", error=str(e))
 
         log.info("✅ Migração diária concluída")
 
