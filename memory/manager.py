@@ -85,7 +85,10 @@ class MemoryManager:
         self._buffer: list[dict] = []
         self._buffer_tokens: int = 0
         self._last_save: datetime = datetime.now()
-        self._file_counter: int = self._get_next_file_counter()
+        
+        # Controle de Hora Solar e Recuperação de RAM Backup (Fases 3 e 4)
+        self._current_hour: int = datetime.now().hour
+        self._load_current_hour_md()
 
         # Embedder (carregado sob demanda)
         self._embedder = None
@@ -133,37 +136,43 @@ class MemoryManager:
             except Exception as e:
                 log.warning("⚠️ Erro salvando interação no PostgreSQL", error=str(e))
 
-        # Verificar se deve salvar buffer para .md (backup local)
-        should_save = (
-            len(self._buffer) >= 10 or  # A cada 10 interações
+        now = datetime.now()
+        hour_changed = now.hour != self._current_hour
+
+        # Verificar se deve fazer backup intermediário do buffer
+        should_sync = (
+            len(self._buffer) > 0 and len(self._buffer) % 5 == 0 or
             self._buffer_tokens >= self.config.context_max_tokens or
-            self._minutes_since_last_save() >= 15  # A cada 15 minutos
+            self._minutes_since_last_save() >= 15
         )
 
-        if should_save:
-            await self._save_buffer_to_md()
+        if hour_changed:
+            await self._save_buffer_to_md(clear_buffer=True)
+            self._current_hour = now.hour
+        elif should_sync:
+            await self._save_buffer_to_md(clear_buffer=False)
 
     async def flush(self):
         """Força salvamento do buffer atual"""
         if self._buffer:
-            await self._save_buffer_to_md()
+            await self._save_buffer_to_md(clear_buffer=True)
 
     # ============================================
     # CAMADA 2: MEMORY.MD (FILESYSTEM)
     # ============================================
 
-    async def _save_buffer_to_md(self):
-        """Salva buffer atual como arquivo memory.md"""
+    async def _save_buffer_to_md(self, clear_buffer: bool = True):
+        """Salva buffer atual como arquivo memory.md usando a Hora Solar"""
         if not self._buffer:
             return
 
         today = date.today().isoformat()
-        self._file_counter += 1
-        filename = f"{today}_{self._file_counter:03d}.md"
+        current_hour = f"{self._current_hour:02d}00"
+        filename = f"{today}_{current_hour}.md"
         filepath = self.daily_dir / filename
 
-        # Montar conteúdo do arquivo
-        content = f"# Memory Snapshot — {datetime.now().isoformat()}\n\n"
+        # Montar conteúdo do arquivo com base em todo o buffer!
+        content = f"# Memory Snapshot — {today} {current_hour}\n\n"
         content += f"**Tokens estimados**: {self._buffer_tokens}\n"
         content += f"**Interações**: {len(self._buffer)}\n\n---\n\n"
 
@@ -175,12 +184,14 @@ class MemoryManager:
         async with aiofiles.open(filepath, "w", encoding="utf-8") as f:
             await f.write(content)
 
-        log.info("💾 Memory.md salvo", file=filename,
-                 tokens=self._buffer_tokens, interactions=len(self._buffer))
+        log.info("💾 Memory.md sincronizado", file=filename,
+                 tokens=self._buffer_tokens, interactions=len(self._buffer), clear=clear_buffer)
 
-        # Limpar buffer
-        self._buffer.clear()
-        self._buffer_tokens = 0
+        # Limpar buffer somente na virada da hora
+        if clear_buffer:
+            self._buffer.clear()
+            self._buffer_tokens = 0
+            
         self._last_save = datetime.now()
 
     # ============================================
@@ -415,20 +426,50 @@ class MemoryManager:
     def _minutes_since_last_save(self) -> float:
         return (datetime.now() - self._last_save).total_seconds() / 60
 
-    def _get_next_file_counter(self) -> int:
-        """Descobre o próximo número de arquivo para hoje"""
+    def _load_current_hour_md(self):
+        """
+        No startup do bot, tenta recuperar o _buffer a partir do arquivo MD 
+        da hora solar atual se existir. Evita amnésia imediata em restarts.
+        """
+        import re
         today = date.today().isoformat()
-        existing = list(self.daily_dir.glob(f"{today}_*.md"))
-        if not existing:
-            return 0
-        numbers = []
-        for f in existing:
-            try:
-                num = int(f.stem.split("_")[-1])
-                numbers.append(num)
-            except (ValueError, IndexError):
-                pass
-        return max(numbers) if numbers else 0
+        current_hour = f"{self._current_hour:02d}00"
+        filename = f"{today}_{current_hour}.md"
+        filepath = self.daily_dir / filename
+        
+        if not filepath.exists():
+            return
+            
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            entries = content.split("### [")
+            for entry_block in entries[1:]:
+                lines = entry_block.split("\n", 1)
+                if not lines:
+                    continue
+                timestamp = lines[0].strip().replace("]", "")
+                rest = lines[1] if len(lines) > 1 else ""
+                
+                user_match = re.search(r"\*\*User\*\*:\s*(.*?)\n\n\*\*Assistant\*\*", rest, re.DOTALL)
+                asst_match = re.search(r"\*\*Assistant\*\*:\s*(.*?)\n\n---", rest, re.DOTALL)
+                
+                if user_match and asst_match:
+                    user_text = user_match.group(1).strip()
+                    asst_text = asst_match.group(1).strip()
+                    self._buffer.append({
+                        "timestamp": timestamp,
+                        "user": user_text,
+                        "assistant": asst_text
+                    })
+                    self._buffer_tokens += self._estimate_tokens(user_text + asst_text)
+                    
+            if self._buffer:
+                log.info("♻️ Memória da hora solar restaurada", filename=filename, interactions=len(self._buffer))
+                
+        except Exception as e:
+            log.error("⚠️ Fallback: erro ao restaurar memória .md na inicialização", error=str(e))
 
     def _extract_tags(self, content: str) -> list[str]:
         """Extrai tags básicas do conteúdo (sem LLM)"""
