@@ -206,100 +206,83 @@ class OpenPY:
         4. Delegar ou responder diretamente
         5. Salvar interação na memória
         """
+        from shared.models import InputType
+
+        # Converter tipo
         try:
-            from shared.models import InputType
+            itype = InputType(input_type)
+        except ValueError:
+            itype = InputType.UNKNOWN
 
-            # Converter tipo
-            try:
-                itype = InputType(input_type)
-            except ValueError:
-                itype = InputType.UNKNOWN
+        # Pensar (4 camadas)
+        thinking = await self.brain.think(
+            text=input_text,
+            input_type=itype,
+            attachments=attachments,
+        )
 
-            # Pensar (4 camadas)
-            thinking = await self.brain.think(
-                text=input_text,
-                input_type=itype,
-                attachments=attachments,
+        # Obter histórico conversacional do usuário
+        history = self._get_conversation_history(user_id)
+
+        # Se tem agente alvo, delegar COM CONTEXTO
+        if thinking.target_agent:
+            result = await self.orchestrator.dispatch(
+                thinking, attachments,
+                conversation_history=history[-10:]  # Últimas 5 trocas para o agente
             )
 
-            # Obter histórico conversacional do usuário
-            history = self._get_conversation_history(user_id)
+            # Salvar no histórico conversacional
+            response_text = result.output or result.error or "Sem resultado"
+            self._add_to_conversation(user_id, "user", input_text)
+            self._add_to_conversation(user_id, "assistant", response_text)
 
-            # Se tem agente alvo, delegar COM CONTEXTO
-            if thinking.target_agent:
-                result = await self.orchestrator.dispatch(
-                    thinking, attachments,
-                    conversation_history=history[-10:]  # Últimas 5 trocas para o agente
+            # Salvar na memória de longo prazo
+            if self.memory_manager:
+                await self.memory_manager.buffer_interaction(input_text, response_text)
+
+            return {
+                "response": response_text,
+                "task_id": result.task_id,
+                "status": result.status.value,
+                "delegated_to": thinking.target_agent,
+            }
+
+        # Senão, Core responde diretamente via LLM
+        if self.llm_router:
+            # === MEMÓRIA SEMÂNTICA (longo prazo) ===
+            semantic_context = ""
+            if self.memory_manager:
+                semantic_context = await self._build_semantic_context(
+                    input_text, user_id
                 )
 
-                # Salvar no histórico conversacional
-                response_text = result.output or result.error or "Sem resultado"
-                self._add_to_conversation(user_id, "user", input_text)
-                self._add_to_conversation(user_id, "assistant", response_text)
+            system_prompt = build_core_system_prompt(self._soul, self._essence)
 
-                # Salvar na memória de longo prazo
-                if self.memory_manager:
-                    try:
-                        await self.memory_manager.buffer_interaction(input_text, response_text)
-                    except Exception as e:
-                        log.warning("⚠️ Erro salvando em memória (delegação)", error=str(e))
+            # Injetar contexto semântico no prompt (se houver)
+            if semantic_context:
+                system_prompt += f"\n\n{semantic_context}"
 
-                return {
-                    "response": response_text,
-                    "task_id": result.task_id,
-                    "status": result.status.value,
-                    "delegated_to": thinking.target_agent,
-                }
+            # === HISTÓRICO CONVERSACIONAL (curto prazo) ===
+            # Injetar histórico entre system e user para manter contexto
+            messages = [
+                {"role": "system", "content": system_prompt},
+                *history,  # Últimas N trocas de mensagem
+                {"role": "user", "content": input_text},
+            ]
 
-            # Senão, Core responde diretamente via LLM
-            if self.llm_router:
-                # === MEMÓRIA SEMÂNTICA (longo prazo) ===
-                semantic_context = ""
-                if self.memory_manager:
-                    try:
-                        semantic_context = await self._build_semantic_context(
-                            input_text, user_id
-                        )
-                    except Exception as e:
-                        log.warning("⚠️ Erro buscando contexto semântico", error=str(e))
+            response = await self.llm_router.complete(messages=messages)
 
-                system_prompt = build_core_system_prompt(self._soul, self._essence)
+            # Salvar no histórico conversacional (RAM)
+            self._add_to_conversation(user_id, "user", input_text)
+            self._add_to_conversation(user_id, "assistant", response)
 
-                # Injetar contexto semântico no prompt (se houver)
-                if semantic_context:
-                    system_prompt += f"\n\n{semantic_context}"
+            # Salvar na memória de longo prazo (buffer → md → PostgreSQL)
+            if self.memory_manager:
+                await self.memory_manager.buffer_interaction(input_text, response)
 
-                # === HISTÓRICO CONVERSACIONAL (curto prazo) ===
-                # Injetar histórico entre system e user para manter contexto
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    *history,  # Últimas N trocas de mensagem
-                    {"role": "user", "content": input_text},
-                ]
+            return {"response": response, "status": "completed"}
 
-                response = await self.llm_router.complete(messages=messages)
-
-                # Salvar no histórico conversacional (RAM)
-                self._add_to_conversation(user_id, "user", input_text)
-                self._add_to_conversation(user_id, "assistant", response)
-
-                # Salvar na memória de longo prazo (buffer → md → PostgreSQL)
-                if self.memory_manager:
-                    try:
-                        await self.memory_manager.buffer_interaction(input_text, response)
-                    except Exception as e:
-                        log.warning("⚠️ Erro salvando em memória (direct)", error=str(e))
-
-                return {"response": response, "status": "completed"}
-
-            return {"response": "⚠️ Nenhum provedor LLM configurado. Use /config.", "status": "error"}
-
-        except Exception as e:
-            log.error("❌ Erro crítico no process()", error=str(e))
-            return {
-                "response": f"⚠️ Erro ao processar: {str(e)[:300]}",
-                "status": "error"
-            }
+        return {"response": "⚠️ Nenhum provedor LLM configurado. Use /config.", "status": "error"}
 
     # ============================================
     # HISTÓRICO CONVERSACIONAL (Curto Prazo — RAM)
