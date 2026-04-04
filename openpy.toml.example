@@ -5,7 +5,7 @@
 
 [core]
 name = "Open-PY"
-version = "2.0.0"
+version = "3.1.0"
 language = "pt-BR"
 default_model = ""                            # Ex: google/gemma-4-31b-it
 fallback_model = ""                           # Ex: qwen/qwen3-coder-480b-a35b-instruct

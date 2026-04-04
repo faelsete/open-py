@@ -1,6 +1,6 @@
 [project]
 name = "open-py"
-version = "1.0.0"
+version = "3.1.0"
 description = "Framework de Agentes Autônomos Inteligentes para Linux"
 requires-python = ">=3.11"
 license = {text = "MIT"}

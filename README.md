@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL-3.0"></a>
-  <img src="https://img.shields.io/badge/version-3.0.0-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-3.1.0-green.svg" alt="Version">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/platform-Ubuntu%2022.04%2B-orange.svg" alt="Platform">
   <img src="https://img.shields.io/badge/PostgreSQL-16%2B-336791.svg" alt="PostgreSQL">
@@ -798,7 +798,17 @@ pgvector>=0.2         # pgvector Python client
 
 ## 📋 Changelog
 
-### v3.0.0 (Atual) — "Hardened Brain"
+### v3.1.0 (Atual) — "Resilient Architecture & Context Compaction"
+
+- 🗜️ **Context Compaction**: Compressão automática do buffer em RAM para LLM (evita overloads via 20 interações).
+- 🧩 **Agent Creator Pipeline**: Pipeline de criação de agentes customizados agora 100% sob aprovação ("SIM"/"NÃO").
+- 🧠 **Delegação Forçada / Intenção (Fase 7 e 8)**: Bypass avançado para intenção de tarefa ignorando conversinhas (*chit-chat*). Orquestrador e Router protegidos.
+- 📆 **Rastreamento de Memória por HORA SOLAR**: Fix no salvamento cíclico dos arquivos MD (arquivos temporais mais estáveis `memory/md`).
+- ⚡ **DB Resilients**: Correção nas colunas do PostgreSQL `pgvector`, isolando embeddings das memórias MD, não quebrando mais em inserts da engine base.
+- 📝 **Comando `/remember`**: Adição de memória permanente diretamente pelo Telegram (importance: 10).
+
+### v3.0.0 — "Hardened Brain"
+
 - 🧠 **Memória Semântica**: busca contextual (pgvector) — só injeta memórias relevantes ao input atual
 - 📦 **Message Batching**: agrupa mensagens em janela de 2s antes de processar
 - 📋 **Task Queue**: fila obrigatória com prioridade (CRITICAL > HIGH > NORMAL > LOW)
