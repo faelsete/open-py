@@ -51,6 +51,9 @@ class OpenPY:
         # Histórico conversacional por usuário (RAM)
         # Chave: user_id (int) → Valor: lista de {role, content}
         self._conversation_histories: dict[int, list[dict]] = {}
+        
+        # Guardar pendentes para confirmação
+        self._pending_creations: dict[int, dict] = {}
 
     # ============================================
     # STARTUP
@@ -207,6 +210,23 @@ class OpenPY:
         5. Salvar interação na memória
         """
         try:
+            # === DELEGAÇÃO FORÇADA POR INTENÇÃO (Fase 8: Confirmação) ===
+            if user_id in self._pending_creations:
+                spec = self._pending_creations.pop(user_id)
+                text_lower = input_text.strip().lower()
+                if text_lower in ["sim", "s", "yes", "y", "confirmo", "criar"]:
+                    agent = await self.agent_factory.create_custom(spec)
+                    if agent:
+                        response_text = f"✅ Agente customizado '{agent.config.name}' criado com sucesso!"
+                    else:
+                        response_text = "❌ Falha ao criar agente customizado."
+                else:
+                    response_text = "❌ Criação do agente cancelada."
+                    
+                self._add_to_conversation(user_id, "user", input_text)
+                self._add_to_conversation(user_id, "assistant", response_text)
+                return {"response": response_text, "status": "completed"}
+
             from shared.models import InputType
 
             # Converter tipo
@@ -241,6 +261,36 @@ class OpenPY:
                     thinking, attachments,
                     conversation_history=history[-10:]  # Últimas 5 trocas para o agente
                 )
+
+                # === INÍCIO MUDANÇA: FASE 8 ===
+                if thinking.target_agent == "agent_creator" and result.status != TaskStatus.FAILED:
+                    import json
+                    try:
+                        # Extrair a string do json usando regex ou carregar direto se for um JSON purista.
+                        # Tenta dar load no texto que o agent retornar. Podemos pegar na marra as chaves de {}
+                        # se trouxer markdowns de codigo
+                        json_str = result.output
+                        import re
+                        match = re.search(r'```(?:json)?(.*?)```', json_str, re.DOTALL)
+                        if match:
+                            json_str = match.group(1).strip()
+                            
+                        spec = json.loads(json_str)
+                        self._pending_creations[user_id] = spec
+                        response_text = f"⚙️ Spec do agente gerada com sucesso!\n```json\n{json.dumps(spec, indent=2)}\n```\n\nDeseja criar este agente agora? (Responda SIM ou NÃO)"
+                        
+                        self._add_to_conversation(user_id, "user", input_text)
+                        self._add_to_conversation(user_id, "assistant", "Spec gerada. Aguardando confirmação.")
+                        
+                        return {
+                            "response": response_text,
+                            "task_id": result.task_id,
+                            "status": "waiting",
+                            "delegated_to": "agent_creator"
+                        }
+                    except BaseException as e:
+                        log.error("Falha ao analisar JSON de agent_creator", error=str(e))
+                # === FIM FASE 8 ===
 
                 # Salvar no histórico conversacional
                 response_text = result.output or result.error or "Sem resultado"
