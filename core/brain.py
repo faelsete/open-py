@@ -74,8 +74,13 @@ SENÃO → resolver com raciocínio próprio
 # Padrões regex para classificação local
 CODE_PATTERNS = re.compile(
     r'(```|def |class |import |function |const |var |let |error|bug|debug|script|'
-    r'traceback|exception|syntax|compile|npm|pip|git |docker|bash|python|node|'
+    r'traceback|exception|syntax|compile|npm |pip |git |docker |bash |'
     r'TypeError|ValueError|IndentationError|ModuleNotFoundError)',
+    re.IGNORECASE
+)
+
+TASK_INTENT_PATTERN = re.compile(
+    r'\b(crie|fa[çc]a|pesquise|busque|analise|procure|gere|implemente)\b',
     re.IGNORECASE
 )
 

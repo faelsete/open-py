@@ -225,6 +225,16 @@ class OpenPY:
             # Obter histórico conversacional do usuário
             history = self._get_conversation_history(user_id)
 
+            # === DELEGAÇÃO FORÇADA POR INTENÇÃO (Fase 7) ===
+            from core.brain import TASK_INTENT_PATTERN
+            if not thinking.target_agent and TASK_INTENT_PATTERN.search(input_text):
+                text_lower = input_text.lower()
+                if "pesquise" in text_lower or "busque" in text_lower or "procure" in text_lower:
+                    thinking.target_agent = "researcher"
+                else:
+                    thinking.target_agent = "builder"
+                thinking.delegation_reason = "Intenção de tarefa detectada via regex estrutural (Fase 7)"
+                
             # Se tem agente alvo, delegar COM CONTEXTO
             if thinking.target_agent:
                 result = await self.orchestrator.dispatch(
