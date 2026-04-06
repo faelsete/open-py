@@ -72,8 +72,8 @@ class OpenPY:
 
         # 1. Configuração
         self.config = load_config()
-        setup_logging(level="INFO")
-        log.info("✅ Configuração carregada")
+        setup_logging(level=self.config.core.log_level)
+        log.info("✅ Configuração carregada", log_level=self.config.core.log_level)
 
         # 2. Carregar identidade (soul.md + essence.md)
         await self._load_identity()

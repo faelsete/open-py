@@ -17,13 +17,14 @@ from typing import Optional
 
 class CoreConfig(BaseModel):
     name: str = "Open-PY"
-    version: str = "1.0.0"
+    version: str = "4.1.0"
     language: str = "pt-BR"
     default_model: str = ""
     fallback_model: str = ""
     max_concurrent_agents: int = 10
     thinking_layers: int = 4
     install_dir: str = "/opt/open-py"
+    log_level: str = "DEBUG"  # DEBUG, INFO, WARNING, ERROR
 
 
 class DatabaseConfig(BaseModel):

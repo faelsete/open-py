@@ -3,6 +3,7 @@ Open-PY — Telegram Bot (aiogram 3.x)
 Frontend principal do sistema via Telegram.
 """
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from shared.config import TelegramConfig
 from shared.logger import get_logger
 from core.rate_limiter import RateLimiter
 from core.audit_log import AuditLog
-from core.message_queue import MessageBatcher
+from core.message_queue import MessageBatcher, TaskQueue, QueuedTask, Priority
 from core.auto_learner import AutoLearner
 
 log = get_logger("telegram")
@@ -69,6 +70,10 @@ class TelegramBot:
 
         # Cache de messages para callback
         self._pending_replies: dict[int, types.Message] = {}
+
+        # v4.0: Task Queue — fila de tarefas com prioridade
+        self.queue = TaskQueue(max_concurrent=1)
+        self.queue.set_processor(self._core_processor)
 
         # Registrar handlers
         self._register_handlers()
@@ -620,7 +625,6 @@ class TelegramBot:
             ))
 
         # Criar tarefa para a fila
-        from core.message_queue import QueuedTask, Priority
         import uuid
         
         task = QueuedTask(
@@ -733,6 +737,9 @@ class TelegramBot:
             BotCommand(command="essence", description="Ver essence.md"),
         ]
         await self.bot.set_my_commands(commands)
+
+        # Iniciar workers da fila de tarefas
+        await self.queue.start_workers(num_workers=1)
 
         log.info("📱 Telegram bot iniciando polling...")
         await self.dp.start_polling(self.bot)
