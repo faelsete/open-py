@@ -378,7 +378,9 @@ class NeuralEngine:
         agents = self.agent_registry.list_all()
         lines = []
         for a in agents:
-            lines.append(f"- {a.name}: {a.config.description} (model: {a.config.model})")
+            name = a.get('name', 'unknown') if isinstance(a, dict) else getattr(a, 'name', 'unknown')
+            desc = a.get('description', '') if isinstance(a, dict) else getattr(a, 'description', '')
+            lines.append(f"- {name}: {desc}")
         return "\n".join(lines)
 
     # ============================================

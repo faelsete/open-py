@@ -23,6 +23,12 @@ from core.auto_learner import AutoLearner
 log = get_logger("telegram")
 
 
+def _h(text: str) -> str:
+    """Escape HTML entities for safe Telegram messages"""
+    import html
+    return html.escape(str(text))
+
+
 class TelegramBot:
     """
     Bot Telegram como frontend único do Open-PY.
@@ -36,7 +42,7 @@ class TelegramBot:
         self.bot = Bot(
             token=config.bot_token,
             default=DefaultBotProperties(
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.HTML
             )
         )
         self.dp = Dispatcher()
@@ -98,7 +104,7 @@ class TelegramBot:
 
             if is_first_boot:
                 await message.reply(
-                    "🌱 **Acabei de nascer!**\n\n"
+                    "🌱 <b>Acabei de nascer!</b>\n\n"
                     "Sou seu novo agente autônomo. "
                     "Ainda não sei nada sobre você, mas quero aprender tudo.\n\n"
                     "Me conta:\n"
@@ -115,7 +121,7 @@ class TelegramBot:
                 )
             else:
                 await message.reply(
-                    "🧠 **Open-PY v3.1** está online!\n\n"
+                    "🧠 <b>Open-PY v4.1</b> está online!\n\n"
                     "Envie qualquer mensagem, imagem, áudio ou documento.\n\n"
                     "Use /commands para ver tudo que posso fazer."
                 )
@@ -133,42 +139,42 @@ class TelegramBot:
             if not self._is_authorized(message.from_user.id):
                 return
             text = (
-                "📖 **Todos os Comandos Open-PY**\n\n"
+                "📖 <b>Todos os Comandos Open-PY</b>\n\n"
 
-                "🔧 **Sistema**\n"
+                "🔧 <b>Sistema</b>\n"
                 "/start — Iniciar o bot\n"
                 "/commands — Esta lista de comandos\n"
                 "/status — RAM, disco, agentes, tarefas\n"
                 "/health — Healthcheck de todos os componentes\n"
                 "/audit — Integridade do audit log (SHA-256)\n\n"
 
-                "🧬 **Identidade**\n"
+                "🧬 <b>Identidade</b>\n"
                 "/soul — Ver memória permanente (soul.md)\n"
                 "/essence — Ver personalidade (essence.md)\n\n"
 
-                "💾 **Memória**\n"
+                "💾 <b>Memória</b>\n"
                 "/memory — Estatísticas de memória\n"
                 "/remember <texto> — Salvar fato manualmente\n"
                 "/recall <busca> — Buscar memórias (semântico)\n"
                 "/forget <id> — Esquecer memória específica\n\n"
 
-                "🤖 **Agentes**\n"
+                "🤖 <b>Agentes</b>\n"
                 "/agents — Listar agentes ativos\n"
                 "/spawn <nome> — Criar agente customizado\n"
                 "/kill <nome> — Destruir agente\n\n"
 
-                "📋 **Tarefas**\n"
+                "📋 <b>Tarefas</b>\n"
                 "/tasks — Ver tarefas em execução\n"
                 "/cancel <id> — Cancelar tarefa\n\n"
 
-                "🔌 **Provedores & Modelos**\n"
+                "🔌 <b>Provedores & Modelos</b>\n"
                 "/providers — Listar provedores configurados\n"
                 "/provider <nome> — Trocar provedor ativo\n"
                 "/model <modelo> — Trocar modelo do provedor ativo\n"
                 "/addprovider <nome> <api_key> [url] — Adicionar provedor\n"
                 "/addmodel <provedor> <modelo> — Definir modelo para provedor\n\n"
 
-                "⚙️ **Config**\n"
+                "⚙️ <b>Config</b>\n"
                 "/config — Ver configuração atual\n"
             )
             await message.reply(text)
@@ -185,11 +191,11 @@ class TelegramBot:
             if not providers:
                 await message.reply("Nenhum provedor configurado.")
                 return
-            text = "🔌 **Provedores LLM**\n\n"
+            text = "🔌 <b>Provedores LLM</b>\n\n"
             for p in providers:
                 active = " ← ATIVO" if p["active"] else ""
                 emoji = "🟢" if p["active"] else "⚪"
-                text += f"{emoji} **{p['name']}** — `{p['model']}`{active}\n"
+                text += f"{emoji} <b>{p['name']}</b> — <code>{p['model']}</code>{active}\n"
             info = self.core.llm_router.get_current_info()
             text += f"\nTotal: {info['total_providers']} provedor(es)"
             await message.reply(text)
@@ -204,8 +210,8 @@ class TelegramBot:
                 if self.core.llm_router:
                     info = self.core.llm_router.get_current_info()
                     await message.reply(
-                        f"🔌 Provedor ativo: **{info['provider']}**\n"
-                        f"Modelo: `{info['model']}`\n\n"
+                        f"🔌 Provedor ativo: <b>{info['provider']}</b>\n"
+                        f"Modelo: <code>{info['model']}</code>\n\n"
                         f"Para trocar: /provider <nome>"
                     )
                 else:
@@ -226,8 +232,8 @@ class TelegramBot:
                 if self.core.llm_router:
                     info = self.core.llm_router.get_current_info()
                     await message.reply(
-                        f"🤖 Modelo atual: `{info['model']}`\n"
-                        f"Provedor: **{info['provider']}**\n\n"
+                        f"🤖 Modelo atual: <code>{info['model']}</code>\n"
+                        f"Provedor: <b>{info['provider']}</b>\n\n"
                         f"Para trocar: /model <nome_do_modelo>"
                     )
                 else:
@@ -248,9 +254,9 @@ class TelegramBot:
                 await message.reply(
                     "Use: /addprovider <nome> <api_key> [api_base]\n\n"
                     "Exemplos:\n"
-                    "`/addprovider openrouter sk-or-xxx`\n"
-                    "`/addprovider openai sk-xxx`\n"
-                    "`/addprovider nvidia nvapi-xxx https://integrate.api.nvidia.com/v1`"
+                    "<code>/addprovider openrouter sk-or-xxx</code>\n"
+                    "<code>/addprovider openai sk-xxx</code>\n"
+                    "<code>/addprovider nvidia nvapi-xxx https://integrate.api.nvidia.com/v1</code>"
                 )
                 return
             name = parts[0].lower()
@@ -284,9 +290,9 @@ class TelegramBot:
                 await message.reply(
                     "Use: /addmodel <provedor> <modelo>\n\n"
                     "Exemplos:\n"
-                    "`/addmodel openrouter qwen/qwen3-235b-a22b:free`\n"
-                    "`/addmodel openai gpt-4o`\n"
-                    "`/addmodel anthropic claude-sonnet-4-20250514`"
+                    "<code>/addmodel openrouter qwen/qwen3-235b-a22b:free</code>\n"
+                    "<code>/addmodel openai gpt-4o</code>\n"
+                    "<code>/addmodel anthropic claude-sonnet-4-20250514</code>"
                 )
                 return
             provider = parts[0].lower()
@@ -318,10 +324,10 @@ class TelegramBot:
                 info = self.core.llm_router.get_current_info()
                 provider_info = (
                     f"🔌 Provedor: {info['provider']}\n"
-                    f"🤖 Modelo: `{info['model']}`\n"
+                    f"🤖 Modelo: <code>{info['model']}</code>\n"
                 )
             text = (
-                "📊 **Status Open-PY v3.1**\n\n"
+                "📊 <b>Status Open-PY v4.1</b>\n\n"
                 f"{provider_info}"
                 f"🧠 Memórias: {status['memory_count']}\n"
                 f"🤖 Agentes: {status['active_agents']}\n"
@@ -340,16 +346,16 @@ class TelegramBot:
             status_emoji = {"healthy": "🟢", "degraded": "🟡", "down": "🔴"}.get(
                 report.get("status", ""), "⚪"
             )
-            text = f"{status_emoji} **Healthcheck Open-PY**\n\n"
+            text = f"{status_emoji} <b>Healthcheck Open-PY</b>\n\n"
             for comp, info in report.get("components", {}).items():
                 if isinstance(info, dict) and "status" in info:
                     emoji = {"up": "🟢", "down": "🔴", "not_configured": "⚪"}.get(
                         info["status"], "🟡"
                     )
-                    text += f"{emoji} **{comp}**: {info['status']}\n"
+                    text += f"{emoji} <b>{comp}</b>: {info['status']}\n"
                 elif isinstance(info, dict):
                     # Agent health report
-                    text += f"\n🤖 **Saúde dos Agentes:**\n"
+                    text += f"\n🤖 <b>Saúde dos Agentes:</b>\n"
                     for agent_name, health in info.items():
                         h_emoji = "🟢" if health.get("healthy") else "🔴"
                         fails = health.get("failures", 0)
@@ -364,10 +370,10 @@ class TelegramBot:
             if not agents:
                 await message.reply("Nenhum agente ativo.")
                 return
-            text = "🤖 **Agentes Ativos**\n\n"
+            text = "🤖 <b>Agentes Ativos</b>\n\n"
             for a in agents:
                 status_emoji = {"idle": "🟢", "running": "🟡", "error": "🔴"}.get(a["status"], "⚪")
-                text += f"{status_emoji} **{a['name']}** — {a['description']}\n"
+                text += f"{status_emoji} <b>{_h(a['name'])}</b> — {_h(a['description'])}\n"
             await message.reply(text)
 
         @self.dp.message(Command("memory"))
@@ -376,7 +382,7 @@ class TelegramBot:
                 return
             stats = await self.core.memory_manager.get_stats() if self.core.memory_manager else {}
             text = (
-                "💾 **Memória Open-PY**\n\n"
+                "💾 <b>Memória Open-PY</b>\n\n"
                 f"Total no PostgreSQL: {stats.get('total', 0)}\n"
                 f"Hoje: {stats.get('today', 0)}\n"
                 f"Tags únicas: {stats.get('unique_tags', 0)}\n"
@@ -413,7 +419,7 @@ class TelegramBot:
             if self.core.memory_manager:
                 results = await self.core.memory_manager.search(query, mode="hybrid", limit=5)
                 if results:
-                    text = "🔍 **Memórias encontradas**\n\n"
+                    text = "🔍 <b>Memórias encontradas</b>\n\n"
                     for r in results:
                         text += f"• {r['content'][:200]}\n\n"
                     await message.reply(text)
@@ -430,22 +436,22 @@ class TelegramBot:
             if not tasks:
                 await message.reply("Nenhuma tarefa ativa.")
                 return
-            text = "📋 **Tarefas Ativas**\n\n"
+            text = "📋 <b>Tarefas Ativas</b>\n\n"
             for t in tasks:
-                text += f"• `{t['task_id']}` — {t['task'][:80]}\n"
+                text += f"• <code>{t['task_id']}</code> — {t['task'][:80]}\n"
             await message.reply(text)
 
         @self.dp.message(Command("soul"))
         async def cmd_soul(message: types.Message):
             if not self._is_authorized(message.from_user.id):
                 return
-            await message.reply(f"🧬 **Soul.md**\n\n{self.core._soul[:3000]}")
+            await message.reply(f"🧬 <b>Soul.md</b>\n\n{self.core._soul[:3000]}")
 
         @self.dp.message(Command("essence"))
         async def cmd_essence(message: types.Message):
             if not self._is_authorized(message.from_user.id):
                 return
-            await message.reply(f"🎭 **Essence.md**\n\n{self.core._essence[:3000]}")
+            await message.reply(f"🎭 <b>Essence.md</b>\n\n{self.core._essence[:3000]}")
 
         @self.dp.message(Command("debug"))
         async def cmd_debug(message: types.Message):
@@ -458,15 +464,15 @@ class TelegramBot:
             m_stats = await self.core.memory_manager.get_stats() if self.core.memory_manager else {}
             
             text = (
-                "🧪 **Diagnostic mode on**\n\n"
-                f"**Task Queue:**\n"
+                "🧪 <b>Diagnostic mode on</b>\n\n"
+                f"<b>Task Queue:</b>\n"
                 f"• Pendentes: {q_stats['queue_size']}\n"
                 f"• Processando: {q_stats['running']}\n"
                 f"• Total histórico: {q_stats['total_processed']}\n\n"
-                f"**Message Batcher:**\n"
+                f"<b>Message Batcher:</b>\n"
                 f"• Chats ativos: {b_stats['pending_chats']}\n"
                 f"• Timers: {b_stats['active_timers']}\n\n"
-                f"**Memory Engine:**\n"
+                f"<b>Memory Engine:</b>\n"
                 f"• Buffer: {m_stats.get('buffer_size', 0)} / 20\n"
                 f"• Last Compact: {m_stats.get('last_compact', 'Nunca')}\n"
             )
@@ -481,7 +487,7 @@ class TelegramBot:
             stats = await self.audit.get_stats()
             chain_emoji = "🟢" if chain["valid"] else "🔴"
             text = (
-                f"{chain_emoji} **Audit Log**\n\n"
+                f"{chain_emoji} <b>Audit Log</b>\n\n"
                 f"Chain: {'Válida' if chain['valid'] else 'CORROMPIDA'}\n"
                 f"Entradas hoje: {chain['entries']}\n"
                 f"Total histórico: {stats.get('total_entries', 0)}\n"
@@ -493,9 +499,9 @@ class TelegramBot:
             # Últimas entradas
             recent = await self.audit.get_recent(5)
             if recent:
-                text += "\n**Últimas ações:**\n"
+                text += "\n<b>Últimas ações:</b>\n"
                 for entry in recent:
-                    text += f"• `{entry['action']}` por {entry['actor']} → {entry.get('target', '-')}\n"
+                    text += f"• <code>{entry['action']}</code> por {entry['actor']} → {entry.get('target', '-')}\n"
             await message.reply(text)
 
         # === MENSAGENS DE TEXTO (catch-all) ===
