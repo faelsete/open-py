@@ -48,6 +48,12 @@ class OpenPY:
         self._soul = ""
         self._essence = ""
 
+        # v3.0: Novos subsistemas
+        self.pipeline = None
+        self.validator = None
+        self.extractor = None
+        self.feedback_loop = None
+
         # Histórico conversacional por usuário (RAM)
         # Chave: user_id (int) → Valor: lista de {role, content}
         self._conversation_histories: dict[int, list[dict]] = {}
@@ -106,18 +112,58 @@ class OpenPY:
         )
         log.info("✅ Orchestrator pronto (com audit trail)")
 
-        # 9. Scheduler (heartbeat + cron)
+        # 9. v3.0: Validator (Quality Gate)
+        from core.validator import ResponseValidator
+        self.validator = ResponseValidator(
+            config=self.config.validator,
+            llm_router=self.llm_router,
+        )
+        log.info("✅ Validator (Quality Gate) pronto")
+
+        # 10. v3.0: Memory Extractor (Background)
+        from memory.extractor import MemoryExtractor
+        self.extractor = MemoryExtractor(
+            config=self.config.memory,
+            llm_router=self.llm_router,
+            memory_manager=self.memory_manager,
+        )
+        log.info("✅ Memory Extractor pronto")
+
+        # 11. v3.0: Pipeline (Túnel Rígido)
+        from core.pipeline import ExecutionPipeline
+        self.pipeline = ExecutionPipeline(
+            config=self.config,
+            brain=self.brain,
+            orchestrator=self.orchestrator,
+            memory_manager=self.memory_manager,
+            llm_router=self.llm_router,
+            validator=self.validator,
+        )
+        log.info("✅ Pipeline v3.0 pronto (6 gates)")
+
+        # 12. v3.0: Feedback Loop
+        from core.feedback_loop import FeedbackLoop
+        self.feedback_loop = FeedbackLoop(
+            llm_router=self.llm_router,
+            memory_manager=self.memory_manager,
+            pipeline=self.pipeline,
+            orchestrator=self.orchestrator,
+            validator=self.validator,
+        )
+        log.info("✅ Feedback Loop pronto")
+
+        # 13. Scheduler (heartbeat + cron)
         await self._init_scheduler()
 
-        # 10. Telegram Bot
+        # 14. Telegram Bot
         await self._init_telegram()
         
-        # Injetar LLM router na Memória para Compactação (Fase 9)
+        # Injetar LLM router na Memória para Compactação
         if self.memory_manager and self.llm_router:
             self.memory_manager.llm_router = self.llm_router
 
         self._running = True
-        log.info("🚀 Open-PY pronto e operacional!")
+        log.info("🚀 Open-PY v3.0 pronto e operacional! (Pipeline + Quality Gate + Feedback Loop)")
 
     # ============================================
     # RUNNING
@@ -204,17 +250,15 @@ class OpenPY:
                       attachments: list[str] = None,
                       user_id: int = None, target_agent: str = None) -> dict:
         """
-        Ponto de entrada principal para processar qualquer input.
+        v3.0: Ponto de entrada via Pipeline de 6 Gates.
         
         Fluxo:
-        1. Classificar input (4 camadas do brain)
-        2. Buscar memórias SEMANTICAMENTE relevantes (como um cérebro humano)
-        3. Injetar APENAS o contexto necessário no prompt
-        4. Delegar ou responder diretamente
-        5. Salvar interação na memória
+        1. Comandos especiais (/remember, confirmações)
+        2. Pipeline: Capture → Memory → Route → Prepare → Execute → Validate
+        3. Pós-processamento: salvar histórico, trigger extractors e feedback
         """
         try:
-            # === FASE 9: COMANDO REMEMBER ===
+            # === COMANDO REMEMBER ===
             if input_text.startswith("/remember"):
                 content = input_text[9:].strip()
                 if self.memory_manager:
@@ -230,7 +274,7 @@ class OpenPY:
                     "task_id": None
                 }
                 
-            # === DELEGAÇÃO FORÇADA POR INTENÇÃO (Fase 8: Confirmação) ===
+            # === CONFIRMAÇÃO PENDENTE ===
             if user_id in self._pending_creations:
                 spec = self._pending_creations.pop(user_id)
                 text_lower = input_text.strip().lower()
@@ -247,123 +291,88 @@ class OpenPY:
                 self._add_to_conversation(user_id, "assistant", response_text)
                 return {"response": response_text, "status": "completed"}
 
-            from shared.models import InputType
-
-            # Converter tipo
-            try:
-                itype = InputType(input_type)
-            except ValueError:
-                itype = InputType.UNKNOWN
-
-            # Pensar (4 camadas)
-            thinking = await self.brain.think(
-                text=input_text,
-                input_type=itype,
+            # === v3.0: PIPELINE DE 6 GATES ===
+            history = self._get_conversation_history(user_id)
+            
+            pipeline_result = await self.pipeline.run(
+                raw_input=input_text,
+                input_type=input_type,
                 attachments=attachments,
+                user_id=user_id,
+                conversation_history=history,
+                soul=self._soul,
+                essence=self._essence,
             )
 
-            # Obter histórico conversacional do usuário
-            history = self._get_conversation_history(user_id)
+            if not pipeline_result.success:
+                error_msg = f"⚠️ Pipeline falhou no gate '{pipeline_result.failed_gate}': {pipeline_result.error}"
+                log.error(error_msg)
+                return {"response": error_msg, "status": "error"}
 
-            # === DELEGAÇÃO FORÇADA POR INTENÇÃO (Fase 7) ===
-            from core.brain import TASK_INTENT_PATTERN
-            if not thinking.target_agent and TASK_INTENT_PATTERN.search(input_text):
-                text_lower = input_text.lower()
-                if "pesquise" in text_lower or "busque" in text_lower or "procure" in text_lower:
-                    thinking.target_agent = "researcher"
-                else:
-                    thinking.target_agent = "builder"
-                thinking.delegation_reason = "Intenção de tarefa detectada via regex estrutural (Fase 7)"
-                
-            # Se tem agente alvo, delegar COM CONTEXTO
-            if thinking.target_agent:
-                result = await self.orchestrator.dispatch(
-                    thinking, attachments,
-                    conversation_history=history[-10:]  # Últimas 5 trocas para o agente
+            response_text = pipeline_result.response
+
+            # === PÓS-PROCESSAMENTO ===
+
+            # Agent Creator flow (pending confirmation)
+            if pipeline_result.delegated_to == "agent_creator":
+                import json as _json
+                import re as _re
+                try:
+                    json_str = response_text
+                    match = _re.search(r'```(?:json)?(.*?)```', json_str, _re.DOTALL)
+                    if match:
+                        json_str = match.group(1).strip()
+                    spec = _json.loads(json_str)
+                    self._pending_creations[user_id] = spec
+                    response_text = (f"⚙️ Spec do agente gerada!\n"
+                                    f"```json\n{_json.dumps(spec, indent=2)}\n```\n"
+                                    f"\nDeseja criar este agente? (SIM ou NÃO)")
+                    self._add_to_conversation(user_id, "user", input_text)
+                    self._add_to_conversation(user_id, "assistant", "Spec gerada. Aguardando confirmação.")
+                    return {"response": response_text, "status": "waiting",
+                            "delegated_to": "agent_creator"}
+                except Exception:
+                    pass  # Não é agent_creator, prosseguir normalmente
+
+            # Salvar no histórico conversacional (RAM)
+            self._add_to_conversation(user_id, "user", input_text)
+            self._add_to_conversation(user_id, "assistant", response_text)
+
+            # Salvar na memória de longo prazo
+            if self.memory_manager:
+                await self.memory_manager.buffer_interaction(input_text, response_text)
+
+            # v3.0: Trigger extração de memórias em background
+            if self.extractor and self.memory_manager:
+                self.extractor.record_interaction(
+                    tokens=self.memory_manager._buffer_tokens
+                )
+                await self.extractor.maybe_extract(
+                    self.memory_manager._buffer,
+                    self.memory_manager._buffer_tokens
                 )
 
-                # === INÍCIO MUDANÇA: FASE 8 ===
-                if thinking.target_agent == "agent_creator" and result.status != TaskStatus.FAILED:
-                    import json
-                    try:
-                        # Extrair a string do json usando regex ou carregar direto se for um JSON purista.
-                        # Tenta dar load no texto que o agent retornar. Podemos pegar na marra as chaves de {}
-                        # se trouxer markdowns de codigo
-                        json_str = result.output
-                        import re
-                        match = re.search(r'```(?:json)?(.*?)```', json_str, re.DOTALL)
-                        if match:
-                            json_str = match.group(1).strip()
-                            
-                        spec = json.loads(json_str)
-                        self._pending_creations[user_id] = spec
-                        response_text = f"⚙️ Spec do agente gerada com sucesso!\n```json\n{json.dumps(spec, indent=2)}\n```\n\nDeseja criar este agente agora? (Responda SIM ou NÃO)"
-                        
-                        self._add_to_conversation(user_id, "user", input_text)
-                        self._add_to_conversation(user_id, "assistant", "Spec gerada. Aguardando confirmação.")
-                        
-                        return {
-                            "response": response_text,
-                            "task_id": result.task_id,
-                            "status": "waiting",
-                            "delegated_to": "agent_creator"
-                        }
-                    except BaseException as e:
-                        log.error("Falha ao analisar JSON de agent_creator", error=str(e))
-                # === FIM FASE 8 ===
+            # v3.0: Trigger feedback loop
+            if self.feedback_loop:
+                validate_gate = pipeline_result.gates.get("validate")
+                validated = validate_gate and not validate_gate.skipped if validate_gate else True
+                self.feedback_loop.record_interaction(
+                    user_input=input_text,
+                    response=response_text,
+                    input_type=input_type,
+                    delegated_to=pipeline_result.delegated_to,
+                    validated=validated,
+                    duration_ms=pipeline_result.total_duration_ms,
+                )
+                await self.feedback_loop.maybe_analyze()
 
-                # Salvar no histórico conversacional
-                response_text = result.output or result.error or "Sem resultado"
-                self._add_to_conversation(user_id, "user", input_text)
-                self._add_to_conversation(user_id, "assistant", response_text)
-
-                # Salvar na memória de longo prazo
-                if self.memory_manager:
-                    await self.memory_manager.buffer_interaction(input_text, response_text)
-
-                return {
-                    "response": response_text,
-                    "task_id": result.task_id,
-                    "status": result.status.value,
-                    "delegated_to": thinking.target_agent,
-                }
-
-            # Senão, Core responde diretamente via LLM
-            if self.llm_router:
-                # === MEMÓRIA SEMÂNTICA (longo prazo) ===
-                semantic_context = ""
-                if self.memory_manager:
-                    semantic_context = await self._build_semantic_context(
-                        input_text, user_id
-                    )
-
-                system_prompt = build_core_system_prompt(self._soul, self._essence)
-
-                # Injetar contexto semântico no prompt (se houver)
-                if semantic_context:
-                    system_prompt += f"\n\n{semantic_context}"
-
-                # === HISTÓRICO CONVERSACIONAL (curto prazo) ===
-                # Injetar histórico entre system e user para manter contexto
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    *history,  # Últimas N trocas de mensagem
-                    {"role": "user", "content": input_text},
-                ]
-
-                response = await self.llm_router.complete(messages=messages)
-
-                # Salvar no histórico conversacional (RAM)
-                self._add_to_conversation(user_id, "user", input_text)
-                self._add_to_conversation(user_id, "assistant", response)
-
-                # Salvar na memória de longo prazo (buffer → md → PostgreSQL)
-                if self.memory_manager:
-                    await self.memory_manager.buffer_interaction(input_text, response)
-
-                return {"response": response, "status": "completed"}
-
-            return {"response": "⚠️ Nenhum provedor LLM configurado. Use /config.", "status": "error"}
+            return {
+                "response": response_text,
+                "status": pipeline_result.gates.get("execute", {}).data.get("status", "completed") if pipeline_result.gates.get("execute") and pipeline_result.gates["execute"].data else "completed",
+                "task_id": pipeline_result.task_id,
+                "delegated_to": pipeline_result.delegated_to,
+                "pipeline_ms": pipeline_result.total_duration_ms,
+            }
 
         except Exception as e:
             log.error("⚠️ Erro global no processamento", error=str(e))
@@ -633,13 +642,14 @@ class OpenPY:
             self.llm_router = None
 
     async def _init_memory(self):
-        """Inicializa sistema de memória"""
+        """Inicializa sistema de memória (v3.0: com suporte a Ollama)"""
         try:
             from memory.manager import MemoryManager
             self.memory_manager = MemoryManager(
                 db_pool=self.db_pool,
                 config=self.config.memory,
                 install_dir=self.config.core.install_dir,
+                ollama_config=self.config.ollama,  # v3.0: Ollama para embeddings
             )
             log.info("✅ Sistema de memória pronto")
         except Exception as e:

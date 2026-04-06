@@ -54,6 +54,67 @@ class MemoryConfig(BaseModel):
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dimensions: int = 384
     max_search_results: int = 10
+    # v3.0: Smart compaction
+    compact_threshold_pct: float = 0.80    # Compactar em 80% da window
+    compact_light_pct: float = 0.60        # Compactação leve em 60%
+    compact_light_min_entries: int = 15    # Mínimo de entradas para compactação leve
+    # v3.0: Background extraction
+    extraction_min_tokens: int = 3000      # Min tokens acumulados para extração
+    extraction_min_interactions: int = 10  # Min interações entre extrações
+
+
+class OllamaConfig(BaseModel):
+    """Configuração do Ollama para embeddings locais (GPU-accelerated)"""
+    enabled: str = "auto"    # "auto" | "on" | "off"
+    url: str = "http://localhost:11434"
+    embedding_model: str = "nomic-embed-text"
+    embedding_dimensions: int = 768
+    min_ram_gb: int = 4      # RAM mínima para auto-enable
+    request_timeout: int = 10  # Timeout em segundos para API call
+
+    def should_enable(self) -> bool:
+        """Auto-detect: ON se RAM >= min_ram_gb, OFF caso contrário"""
+        if self.enabled == "on":
+            return True
+        if self.enabled == "off":
+            return False
+        # Auto-detect
+        try:
+            import psutil
+            total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+            return total_ram_gb >= self.min_ram_gb
+        except Exception:
+            return False
+
+
+class PipelineConfig(BaseModel):
+    """Configuração do túnel de execução v3.0"""
+    enabled: bool = True
+    # Gates individuais (todos ON por padrão)
+    gate_memory_recall: bool = True
+    gate_validate: bool = True
+    # Circuit breaker
+    max_gate_failures: int = 3
+    gate_cooldown_minutes: int = 5
+    # Timeouts por gate (segundos)
+    gate_timeout_capture: int = 5
+    gate_timeout_memory: int = 10
+    gate_timeout_route: int = 5
+    gate_timeout_prepare: int = 5
+    gate_timeout_execute: int = 300
+    gate_timeout_validate: int = 15
+
+
+class ValidatorConfig(BaseModel):
+    """Configuração do quality gate"""
+    enabled: bool = True
+    model: str = ""  # Vazio = usa o modelo ativo do router (mais barato)
+    # Skip para respostas curtas (confirmações, emojis, etc)
+    min_response_length: int = 100
+    # Máximo de re-tentativas se resposta for rejeitada
+    max_retries: int = 1
+    # Score mínimo de confiança para aprovar
+    min_confidence: float = 0.7
 
 
 class ProviderConfig(BaseModel):
@@ -86,6 +147,9 @@ class OpenPYConfig(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    validator: ValidatorConfig = Field(default_factory=ValidatorConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     doctor: DoctorConfig = Field(default_factory=DoctorConfig)

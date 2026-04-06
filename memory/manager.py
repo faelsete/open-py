@@ -74,7 +74,8 @@ class MemoryManager:
     """
 
     def __init__(self, db_pool: Optional[asyncpg.Pool],
-                 config: MemoryConfig, install_dir: str):
+                 config: MemoryConfig, install_dir: str,
+                 ollama_config=None):
         self.db = db_pool
         self.config = config
         self.install_dir = install_dir
@@ -95,6 +96,19 @@ class MemoryManager:
         
         # LLM Router injetado para sumarização de memória
         self.llm_router = None
+
+        # v3.0: Ollama config para embeddings
+        self._ollama_config = ollama_config
+        self._use_ollama: bool = False
+        if ollama_config and ollama_config.should_enable():
+            self._use_ollama = True
+            log.info("🦙 Ollama ativado para embeddings",
+                     model=ollama_config.embedding_model,
+                     url=ollama_config.url)
+
+        # v3.0: Circuit breaker para compactação
+        self._compact_failures: int = 0
+        self._max_compact_failures: int = 3
 
     def get_memory_layout(self) -> dict:
         """Retorna layout completo de memória para debug/observabilidade"""
@@ -142,9 +156,13 @@ class MemoryManager:
         now = datetime.now()
         hour_changed = now.hour != self._current_hour
 
-        # === FASE 9: COMPACTAÇÃO AUTOMÁTICA ===
-        if len(self._buffer) >= 20:
+        # === v3.0: COMPACTAÇÃO INTELIGENTE (% da context window) ===
+        usage_pct = self._buffer_tokens / max(self.config.context_max_tokens, 1)
+        if usage_pct >= self.config.compact_threshold_pct:
             asyncio.create_task(self.compact_buffer())
+        elif (usage_pct >= self.config.compact_light_pct and
+              len(self._buffer) >= self.config.compact_light_min_entries):
+            asyncio.create_task(self.compact_buffer(light=True))
 
         # Verificar se deve fazer backup intermediário do buffer
         should_sync = (
@@ -159,45 +177,66 @@ class MemoryManager:
         elif should_sync:
             await self._save_buffer_to_md(clear_buffer=False)
 
-    async def compact_buffer(self):
+    async def compact_buffer(self, light: bool = False):
         """
-        Fase 9: Context Compaction.
-        A cada 20 interações, resume as 15 mais antigas e mantém as 5 mais recentes.
+        v3.0: Smart Context Compaction com circuit breaker.
+        light=False: compactação completa (resume 75% mais antigas)
+        light=True:  compactação leve (resume 50% mais antigas)
         """
-        if len(self._buffer) >= 20 and getattr(self, 'llm_router', None):
-            log.info("🗜️ Iniciando compactação do buffer de contexto...", size=len(self._buffer))
-            try:
-                # Separar as 15 antigas e as restantes recentes
-                old_entries = self._buffer[:15]
-                recent_entries = self._buffer[15:]
-                
-                # Montar texto para resumir
-                text_to_summarize = "Resuma o seguinte trecho da conversa mantendo fatos importantes, contexto técnico e decisões:\n\n"
-                for i, entry in enumerate(old_entries):
-                    text_to_summarize += f"[{i+1}] User: {entry['user']}\nAssistant: {entry['assistant']}\n\n"
-                    
-                # Pedir resumo ao LLM
-                summary = await self.llm_router.complete(
-                    messages=[{"role": "user", "content": text_to_summarize}],
-                    max_tokens=300,
-                    temperature=0.3
-                )
-                
-                # Criar nova entrada sumarizada
-                summarized_entry = {
-                    "timestamp": datetime.now().isoformat(),
-                    "user": "[CONTEXTO COMPACTADO]",
-                    "assistant": f"[Resumo de 15 mensagens anteriores]: {summary.strip()}"
-                }
-                
-                # Atualizar buffer
-                self._buffer = [summarized_entry] + recent_entries
-                
-                # Recalcular tokens
-                self._buffer_tokens = sum(self._estimate_tokens(e['user'] + e['assistant']) for e in self._buffer)
-                
-                log.info("✅ Compactação concluída! Buffer reduzido.", original=20, novo=len(self._buffer))
-            except Exception as e:
+        # Circuit breaker check
+        if self._compact_failures >= self._max_compact_failures:
+            log.warning("🔴 Compactação desabilitada (circuit breaker)")
+            return
+
+        if not getattr(self, 'llm_router', None):
+            return
+
+        if len(self._buffer) < 5:
+            return
+
+        split_pct = 0.50 if light else 0.75
+        split_idx = int(len(self._buffer) * split_pct)
+        old_entries = self._buffer[:split_idx]
+        recent_entries = self._buffer[split_idx:]
+
+        mode = "leve" if light else "completa"
+        log.info(f"🗜️ Compactação {mode}...",
+                 size=len(self._buffer), compact=len(old_entries))
+
+        try:
+            text_to_summarize = "Resuma o seguinte trecho da conversa mantendo fatos importantes, contexto técnico e decisões:\n\n"
+            for i, entry in enumerate(old_entries):
+                text_to_summarize += f"[{i+1}] User: {entry['user']}\nAssistant: {entry['assistant']}\n\n"
+
+            summary = await self.llm_router.complete(
+                messages=[{"role": "user", "content": text_to_summarize}],
+                max_tokens=400 if not light else 200,
+                temperature=0.3
+            )
+
+            summarized_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "user": "[CONTEXTO COMPACTADO]",
+                "assistant": f"[Resumo de {len(old_entries)} mensagens]: {summary.strip()}"
+            }
+
+            self._buffer = [summarized_entry] + recent_entries
+            self._buffer_tokens = sum(
+                self._estimate_tokens(e['user'] + e['assistant']) for e in self._buffer
+            )
+
+            # Circuit breaker: reset no sucesso
+            self._compact_failures = 0
+
+            log.info(f"✅ Compactação {mode} concluída!",
+                     original=len(old_entries) + len(recent_entries),
+                     novo=len(self._buffer))
+        except Exception as e:
+            self._compact_failures += 1
+            if self._compact_failures >= self._max_compact_failures:
+                log.error("🔴 Circuit breaker: compactação desabilitada após falhas",
+                         failures=self._compact_failures)
+            else:
                 log.error("❌ Erro ao compactar buffer", error=str(e))
 
     async def flush(self):
@@ -550,12 +589,41 @@ class MemoryManager:
         return tags
 
     async def _get_embedding(self, text: str) -> Optional[list[float]]:
-        """Gera embedding usando sentence-transformers (local, gratuito)"""
+        """
+        v3.0: Gera embedding via Ollama (GPU) ou sentence-transformers (CPU fallback).
+        Ollama: nomic-embed-text (768 dims, 8192 token context)
+        Fallback: all-MiniLM-L6-v2 (384 dims, CPU)
+        """
+        # === CAMINHO 1: Ollama (se disponível e habilitado) ===
+        if self._use_ollama and self._ollama_config:
+            try:
+                import aiohttp
+                timeout = aiohttp.ClientTimeout(total=self._ollama_config.request_timeout)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    resp = await session.post(
+                        f"{self._ollama_config.url}/api/embeddings",
+                        json={
+                            "model": self._ollama_config.embedding_model,
+                            "prompt": text[:8192]  # nomic-embed-text suporta 8192 tokens
+                        }
+                    )
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("embedding")
+                    else:
+                        log.warning("⚠️ Ollama retornou status", status=resp.status)
+                        # Fallback para sentence-transformers
+            except Exception as e:
+                log.warning("⚠️ Ollama indisponível, fallback para CPU", error=str(e))
+                # Desabilitar Ollama temporariamente para evitar spam de erros
+                self._use_ollama = False
+
+        # === CAMINHO 2: sentence-transformers (CPU fallback) ===
         try:
             if self._embedder is None:
                 from sentence_transformers import SentenceTransformer
                 self._embedder = SentenceTransformer(self.config.embedding_model)
-                log.info("✅ Modelo de embeddings carregado",
+                log.info("✅ Modelo de embeddings carregado (CPU fallback)",
                          model=self.config.embedding_model)
 
             embedding = self._embedder.encode(text[:2000], convert_to_numpy=True)

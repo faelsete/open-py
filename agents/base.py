@@ -40,7 +40,7 @@ class AgentBase:
     async def execute(self, task: AgentTask) -> AgentResult:
         """
         Executa uma tarefa usando LLM diretamente (modo inline).
-        Para agentes simples, não precisa de processo isolado.
+        v3.0: Cada agente usa seu modelo configurado + injeta histórico.
         """
         self.status = AgentStatus.RUNNING
         start_time = datetime.now()
@@ -53,18 +53,32 @@ class AgentBase:
                     error="Nenhum provedor LLM disponível"
                 )
 
+            # v3.0: Modelo independente por agente
+            model = self.config.model if self.config.model != "default" else None
+            log.info("🤖 Agente executando",
+                     agent=self.name, model=model or "default",
+                     task_preview=task.task[:80])
+
             # Montar mensagens para o LLM
             messages = [
                 {"role": "system", "content": self.config.system_prompt},
-                {"role": "user", "content": self._build_task_prompt(task)},
             ]
 
-            # Chamar LLM
-            model = self.config.model if self.config.model != "default" else None
+            # v3.0: Injetar histórico de conversa se disponível
+            if task.context and task.context.get("conversation_history"):
+                history = task.context["conversation_history"]
+                if isinstance(history, list):
+                    messages.extend(history[-6:])  # Últimas 3 trocas
+
+            messages.append({"role": "user", "content": self._build_task_prompt(task)})
+
+            # Chamar LLM com modelo específico do agente
             response = await self.llm.complete(messages=messages, model=model)
 
             duration = (datetime.now() - start_time).total_seconds()
             self.status = AgentStatus.IDLE
+            log.info("✅ Agente concluiu",
+                     agent=self.name, duration=f"{duration:.1f}s")
 
             return AgentResult(
                 task_id=task.task_id,

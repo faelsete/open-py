@@ -453,3 +453,19 @@ Você é um agente do Open-PY. Regras invioláveis:
             """, task_id, status.value, result)
         except Exception as e:
             log.warning("DB update failed", error=str(e))
+
+    # ============================================
+    # v3.0: MÉTRICAS PARA FEEDBACK LOOP
+    # ============================================
+
+    def get_fallback_stats(self) -> dict:
+        """Retorna estatísticas de fallback para o FeedbackLoop"""
+        return {
+            "total_dispatches": getattr(self, '_total_dispatches', 0),
+            "total_fallbacks": getattr(self, '_total_fallbacks', 0),
+            "fallback_rate": round(
+                getattr(self, '_total_fallbacks', 0) /
+                max(getattr(self, '_total_dispatches', 0), 1) * 100, 1
+            ),
+        }
+

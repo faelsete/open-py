@@ -193,3 +193,81 @@ class IPCResponse(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     id: str = ""
+
+
+# ============================================
+# MODELOS — PIPELINE v3.0
+# ============================================
+
+class GateResult(BaseModel):
+    """Resultado de um gate individual do pipeline"""
+    gate_name: str = ""
+    passed: bool = True
+    data: Any = None
+    error: Optional[str] = None
+    duration_ms: float = 0.0
+    skipped: bool = False
+    skip_reason: Optional[str] = None
+
+
+class PipelineResult(BaseModel):
+    """Resultado completo do pipeline de 6 gates"""
+    success: bool = True
+    response: str = ""
+    failed_gate: Optional[str] = None
+    error: Optional[str] = None
+    gates: dict[str, GateResult] = Field(default_factory=dict)
+    total_duration_ms: float = 0.0
+    task_id: Optional[str] = None
+    delegated_to: Optional[str] = None
+    memories_extracted: int = 0
+
+
+class ValidatorVerdict(BaseModel):
+    """Resultado do quality gate"""
+    approved: bool = True
+    confidence: float = 1.0
+    issues: list[str] = Field(default_factory=list)
+    suggestion: Optional[str] = None
+    check_type: str = "auto"  # auto | security | factual | relevance
+
+
+class ExtractionResult(BaseModel):
+    """Resultado de extração de memórias em background"""
+    extracted: int = 0
+    memories: list[dict[str, Any]] = Field(default_factory=list)
+    tokens_processed: int = 0
+    duration_ms: float = 0.0
+
+
+class CircuitBreakerState(BaseModel):
+    """Estado do circuit breaker para qualquer subsistema"""
+    name: str = ""
+    consecutive_failures: int = 0
+    max_failures: int = 3
+    last_failure: Optional[datetime] = None
+    tripped: bool = False
+    cooldown_minutes: int = 5
+
+    def record_failure(self):
+        self.consecutive_failures += 1
+        self.last_failure = datetime.now()
+        if self.consecutive_failures >= self.max_failures:
+            self.tripped = True
+
+    def record_success(self):
+        self.consecutive_failures = 0
+        self.tripped = False
+
+    def check(self) -> bool:
+        """True = pode prosseguir. False = bloqueado."""
+        if not self.tripped:
+            return True
+        if self.last_failure:
+            from datetime import timedelta
+            elapsed = datetime.now() - self.last_failure
+            if elapsed > timedelta(minutes=self.cooldown_minutes):
+                self.tripped = False
+                self.consecutive_failures = 0
+                return True
+        return False

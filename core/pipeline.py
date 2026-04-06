@@ -1,0 +1,517 @@
+"""
+Open-PY — Execution Pipeline v3.0
+Túnel rígido de 6 gates obrigatórios.
+Inspirado em: Claude Code QueryEngine + autoCompact circuit breakers.
+
+Fluxo:
+  API → [capture] → [memory_recall] → [route] → [prepare] → [execute] → [validate] → Telegram
+
+Cada gate DEVE passar para continuar.
+Circuit breaker impede loops infinitos em gates com falha crônica.
+"""
+
+import asyncio
+import time
+from typing import Optional
+
+from shared.models import (
+    ThinkingResult, PipelineResult, GateResult, InputType,
+    CircuitBreakerState, AgentResult, TaskStatus
+)
+from shared.config import OpenPYConfig
+from shared.logger import get_logger
+
+log = get_logger("pipeline")
+
+
+class ExecutionPipeline:
+    """
+    Túnel de execução rígido: 6 gates sequenciais.
+
+    Gate 1 — CAPTURE:       Classifica input (tipo, urgência, continuação)
+    Gate 2 — MEMORY_RECALL: Busca semântica por contexto relevante
+    Gate 3 — ROUTE:         Decide: Core direto ou delegar para agente?
+    Gate 4 — PREPARE:       Monta contexto completo (SECURITY + histórico + memórias)
+    Gate 5 — EXECUTE:       Executa via Core LLM ou despacha para agente
+    Gate 6 — VALIDATE:      Quality gate — verifica resposta antes do envio
+    """
+
+    GATE_NAMES = [
+        "capture",
+        "memory_recall",
+        "route",
+        "prepare",
+        "execute",
+        "validate",
+    ]
+
+    def __init__(self, config: OpenPYConfig, brain=None, orchestrator=None,
+                 memory_manager=None, llm_router=None, validator=None,
+                 feedback_loop=None):
+        self.config = config
+        self.brain = brain
+        self.orchestrator = orchestrator
+        self.memory = memory_manager
+        self.llm = llm_router
+        self.validator = validator
+        self.feedback_loop = feedback_loop
+
+        # Circuit breakers por gate
+        self._breakers: dict[str, CircuitBreakerState] = {
+            name: CircuitBreakerState(
+                name=name,
+                max_failures=config.pipeline.max_gate_failures,
+                cooldown_minutes=config.pipeline.gate_cooldown_minutes,
+            )
+            for name in self.GATE_NAMES
+        }
+
+        # Gate timeouts
+        self._timeouts = {
+            "capture": config.pipeline.gate_timeout_capture,
+            "memory_recall": config.pipeline.gate_timeout_memory,
+            "route": config.pipeline.gate_timeout_route,
+            "prepare": config.pipeline.gate_timeout_prepare,
+            "execute": config.pipeline.gate_timeout_execute,
+            "validate": config.pipeline.gate_timeout_validate,
+        }
+
+        # Métricas por sessão
+        self._total_runs = 0
+        self._total_failures = 0
+        self._gate_timings: dict[str, list[float]] = {n: [] for n in self.GATE_NAMES}
+
+    async def run(self, raw_input: str, input_type: str = "unknown",
+                  attachments: list[str] = None, user_id: int = None,
+                  conversation_history: list[dict] = None,
+                  soul: str = "", essence: str = "") -> PipelineResult:
+        """
+        Executa todos os 6 gates sequencialmente.
+        Falha em gate obrigatório = abort com erro claro.
+        Gate com circuit breaker tripped = skip com warning.
+        """
+        self._total_runs += 1
+        pipeline_start = time.perf_counter()
+        gate_results: dict[str, GateResult] = {}
+        context = {
+            "raw_input": raw_input,
+            "input_type": input_type,
+            "attachments": attachments or [],
+            "user_id": user_id,
+            "history": conversation_history or [],
+            "soul": soul,
+            "essence": essence,
+        }
+
+        for gate_name in self.GATE_NAMES:
+            gate_start = time.perf_counter()
+            breaker = self._breakers[gate_name]
+
+            # Circuit breaker check
+            if not breaker.check():
+                log.warning("🔴 Gate skipado (circuit breaker)",
+                           gate=gate_name, failures=breaker.consecutive_failures)
+                gate_results[gate_name] = GateResult(
+                    gate_name=gate_name,
+                    passed=True,  # Skip não é falha — pipeline continua
+                    skipped=True,
+                    skip_reason=f"Circuit breaker tripped ({breaker.consecutive_failures} falhas)",
+                    duration_ms=0
+                )
+                continue
+
+            # Gate opcional desabilitado?
+            if gate_name == "memory_recall" and not self.config.pipeline.gate_memory_recall:
+                gate_results[gate_name] = GateResult(
+                    gate_name=gate_name, passed=True, skipped=True,
+                    skip_reason="Desabilitado na config"
+                )
+                continue
+            if gate_name == "validate" and not self.config.pipeline.gate_validate:
+                gate_results[gate_name] = GateResult(
+                    gate_name=gate_name, passed=True, skipped=True,
+                    skip_reason="Desabilitado na config"
+                )
+                continue
+
+            try:
+                timeout = self._timeouts.get(gate_name, 30)
+                gate_method = getattr(self, f"_gate_{gate_name}")
+                result_data = await asyncio.wait_for(
+                    gate_method(context, gate_results),
+                    timeout=timeout
+                )
+
+                duration = (time.perf_counter() - gate_start) * 1000
+                gate_results[gate_name] = GateResult(
+                    gate_name=gate_name,
+                    passed=True,
+                    data=result_data,
+                    duration_ms=round(duration, 2)
+                )
+                breaker.record_success()
+                self._gate_timings[gate_name].append(duration)
+
+                log.debug("✅ Gate passou", gate=gate_name,
+                         duration_ms=round(duration, 2))
+
+            except asyncio.TimeoutError:
+                duration = (time.perf_counter() - gate_start) * 1000
+                breaker.record_failure()
+                self._total_failures += 1
+                log.error("⏰ Gate timeout", gate=gate_name,
+                         timeout=self._timeouts.get(gate_name))
+
+                # Memory recall e validate são soft gates — timeout = skip
+                if gate_name in ("memory_recall", "validate"):
+                    gate_results[gate_name] = GateResult(
+                        gate_name=gate_name, passed=True, skipped=True,
+                        skip_reason=f"Timeout ({self._timeouts[gate_name]}s)",
+                        duration_ms=round(duration, 2)
+                    )
+                    continue
+
+                return PipelineResult(
+                    success=False,
+                    failed_gate=gate_name,
+                    error=f"Timeout no gate '{gate_name}' ({self._timeouts[gate_name]}s)",
+                    gates=gate_results,
+                    total_duration_ms=round((time.perf_counter() - pipeline_start) * 1000, 2)
+                )
+
+            except Exception as e:
+                duration = (time.perf_counter() - gate_start) * 1000
+                breaker.record_failure()
+                self._total_failures += 1
+                log.error("❌ Gate falhou", gate=gate_name, error=str(e))
+
+                # Soft gates: skip em erro
+                if gate_name in ("memory_recall", "validate"):
+                    gate_results[gate_name] = GateResult(
+                        gate_name=gate_name, passed=True, skipped=True,
+                        skip_reason=f"Erro: {str(e)[:100]}",
+                        duration_ms=round(duration, 2)
+                    )
+                    continue
+
+                return PipelineResult(
+                    success=False,
+                    failed_gate=gate_name,
+                    error=f"Erro no gate '{gate_name}': {str(e)}",
+                    gates=gate_results,
+                    total_duration_ms=round((time.perf_counter() - pipeline_start) * 1000, 2)
+                )
+
+        # Pipeline completo com sucesso
+        total_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
+        response = ""
+        task_id = None
+        delegated_to = None
+
+        execute_result = gate_results.get("execute")
+        if execute_result and execute_result.data:
+            response = execute_result.data.get("response", "")
+            task_id = execute_result.data.get("task_id")
+            delegated_to = execute_result.data.get("delegated_to")
+
+        # Se validate rodou e modificou a resposta, usar a validada
+        validate_result = gate_results.get("validate")
+        if validate_result and validate_result.data and not validate_result.skipped:
+            validated_response = validate_result.data.get("final_response")
+            if validated_response:
+                response = validated_response
+
+        log.info("✅ Pipeline completo",
+                 total_ms=total_ms,
+                 gates_passed=len([g for g in gate_results.values() if g.passed]),
+                 gates_skipped=len([g for g in gate_results.values() if g.skipped]))
+
+        return PipelineResult(
+            success=True,
+            response=response,
+            gates=gate_results,
+            total_duration_ms=total_ms,
+            task_id=task_id,
+            delegated_to=delegated_to,
+        )
+
+    # ============================================
+    # GATE 1: CAPTURE — Classificação rápida
+    # ============================================
+
+    async def _gate_capture(self, ctx: dict, prev: dict) -> dict:
+        """Classifica input: tipo, urgência, continuação"""
+        from core.brain import classify_input_local
+
+        input_type_str = ctx["input_type"]
+        has_photo = any(a.endswith(('.jpg', '.png', '.webp')) for a in ctx["attachments"])
+        has_audio = any(a.endswith(('.ogg', '.mp3', '.wav', '.m4a')) for a in ctx["attachments"])
+        has_video = any(a.endswith(('.mp4', '.webm', '.mov')) for a in ctx["attachments"])
+        has_doc = any(a.endswith(('.pdf', '.docx', '.xlsx', '.txt')) for a in ctx["attachments"])
+
+        try:
+            itype = InputType(input_type_str)
+        except ValueError:
+            itype = InputType.UNKNOWN
+
+        if itype == InputType.UNKNOWN:
+            itype = classify_input_local(
+                ctx["raw_input"],
+                has_photo=has_photo,
+                has_audio=has_audio,
+                has_video=has_video,
+                has_document=has_doc,
+            )
+
+        ctx["input_type_resolved"] = itype
+        return {"input_type": itype.value, "classified": True}
+
+    # ============================================
+    # GATE 2: MEMORY RECALL — Busca semântica
+    # ============================================
+
+    async def _gate_memory_recall(self, ctx: dict, prev: dict) -> dict:
+        """Busca memórias relevantes ao input atual"""
+        if not self.memory:
+            return {"memories": [], "source": "none"}
+
+        query = ctx["raw_input"]
+        memories = []
+
+        # 1. Buffer RAM (curto prazo — mais relevante)
+        buffer_results = self.memory.search_buffer(query, limit=3)
+        for mem in buffer_results:
+            content = mem.get("content", "")
+            if len(content) > 300:
+                content = content[:300] + "..."
+            memories.append({"content": content, "source": "buffer", "weight": 0.9})
+
+        # 2. PostgreSQL via busca semântica (longo prazo)
+        try:
+            db_results = await self.memory.search(query, mode="hybrid", limit=5)
+            for mem in db_results:
+                content = mem.get("content", "")
+                if len(content) > 300:
+                    content = content[:300] + "..."
+                similarity = mem.get("similarity", 0.5)
+                memories.append({
+                    "content": content,
+                    "source": "postgresql",
+                    "weight": float(similarity) if similarity else 0.5,
+                    "tags": mem.get("tags", []),
+                })
+        except Exception as e:
+            log.warning("⚠️ Busca semântica falhou, usando buffer apenas", error=str(e))
+
+        # 3. Preferências do usuário (sempre úteis)
+        if ctx.get("user_id"):
+            try:
+                prefs = await self.memory.search(
+                    f"PREFERÊNCIA user:{ctx['user_id']}",
+                    mode="keyword", limit=3
+                )
+                for pref in prefs:
+                    content = pref.get("content", "")[:150]
+                    memories.append({
+                        "content": content,
+                        "source": "preferences",
+                        "weight": 0.85,
+                    })
+            except Exception:
+                pass
+
+        ctx["memories"] = memories
+        return {"memories": memories, "count": len(memories)}
+
+    # ============================================
+    # GATE 3: ROUTE — Roteamento inteligente
+    # ============================================
+
+    async def _gate_route(self, ctx: dict, prev: dict) -> dict:
+        """Decide: Core direto ou delegar para agente?"""
+        if not self.brain:
+            return {"target_agent": None, "reason": "brain não disponível"}
+
+        itype = ctx.get("input_type_resolved", InputType.UNKNOWN)
+
+        thinking = await self.brain.think(
+            text=ctx["raw_input"],
+            input_type=itype,
+            attachments=ctx.get("attachments"),
+        )
+
+        ctx["thinking"] = thinking
+        return {
+            "target_agent": thinking.target_agent,
+            "reason": thinking.delegation_reason,
+            "urgency": thinking.urgency.value,
+            "task_id": thinking.task_id,
+        }
+
+    # ============================================
+    # GATE 4: PREPARE — Montar contexto completo
+    # ============================================
+
+    async def _gate_prepare(self, ctx: dict, prev: dict) -> dict:
+        """Monta contexto completo para execução"""
+        from core.brain import build_core_system_prompt
+
+        thinking: ThinkingResult = ctx.get("thinking")
+        memories = ctx.get("memories", [])
+
+        # System prompt com soul + essence
+        system_prompt = build_core_system_prompt(ctx.get("soul", ""), ctx.get("essence", ""))
+
+        # Injetar memórias no contexto
+        if memories:
+            memory_block = "\n## Memórias relevantes (recuperação semântica)\n"
+            for mem in memories[:8]:  # Max 8 memórias no contexto
+                content = mem.get("content", "")
+                tags = mem.get("tags", [])
+                tag_str = f" [{', '.join(tags[:3])}]" if tags else ""
+                memory_block += f"- {content}{tag_str}\n"
+            system_prompt += f"\n{memory_block}"
+
+        ctx["system_prompt"] = system_prompt
+
+        # Montar mensagens completas para o LLM
+        history = ctx.get("history", [])
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *history,
+            {"role": "user", "content": ctx["raw_input"]},
+        ]
+        ctx["messages"] = messages
+
+        return {
+            "system_prompt_tokens": len(system_prompt) // 4,
+            "history_messages": len(history),
+            "memory_injected": len(memories),
+        }
+
+    # ============================================
+    # GATE 5: EXECUTE — Execução real
+    # ============================================
+
+    async def _gate_execute(self, ctx: dict, prev: dict) -> dict:
+        """Executa via Core LLM ou despacha para agente"""
+        thinking: ThinkingResult = ctx.get("thinking")
+
+        # Delegação para agente
+        if thinking and thinking.target_agent and self.orchestrator:
+            result: AgentResult = await self.orchestrator.dispatch(
+                thinking,
+                ctx.get("attachments"),
+                conversation_history=ctx.get("history", [])[-10:]
+            )
+            response = result.output or result.error or "Sem resultado"
+            return {
+                "response": response,
+                "task_id": result.task_id,
+                "delegated_to": thinking.target_agent,
+                "status": result.status.value,
+            }
+
+        # Core responde diretamente via LLM
+        if self.llm:
+            messages = ctx.get("messages", [])
+            response = await self.llm.complete(messages=messages)
+            return {
+                "response": response,
+                "task_id": None,
+                "delegated_to": None,
+                "status": "completed",
+            }
+
+        return {
+            "response": "⚠️ Nenhum provedor LLM configurado.",
+            "status": "error",
+        }
+
+    # ============================================
+    # GATE 6: VALIDATE — Quality gate
+    # ============================================
+
+    async def _gate_validate(self, ctx: dict, prev: dict) -> dict:
+        """Quality gate: verifica resposta antes do envio"""
+        execute_data = prev.get("execute", GateResult()).data or {}
+        response = execute_data.get("response", "")
+
+        # Skip para respostas curtas
+        if len(response) < self.config.validator.min_response_length:
+            return {"final_response": response, "validated": False, "reason": "resposta curta"}
+
+        if not self.validator:
+            return {"final_response": response, "validated": False, "reason": "validator não configurado"}
+
+        verdict = await self.validator.validate(
+            question=ctx["raw_input"],
+            response=response,
+        )
+
+        if verdict.approved:
+            return {
+                "final_response": response,
+                "validated": True,
+                "confidence": verdict.confidence,
+            }
+
+        # Resposta rejeitada — tentar refazer?
+        log.warning("⚠️ Resposta rejeitada pelo validator",
+                    issues=verdict.issues, confidence=verdict.confidence)
+
+        if self.config.validator.max_retries > 0 and self.llm:
+            # Refazer com feedback do validator
+            retry_prompt = (
+                f"Sua resposta anterior foi rejeitada. "
+                f"Problemas: {', '.join(verdict.issues)}. "
+                f"Sugestão: {verdict.suggestion or 'Seja mais preciso e direto.'}. "
+                f"Refaça a resposta para: {ctx['raw_input']}"
+            )
+            messages = ctx.get("messages", [])[:-1]  # Remove user original
+            messages.append({"role": "user", "content": retry_prompt})
+            retried = await self.llm.complete(messages=messages)
+            return {
+                "final_response": retried,
+                "validated": True,
+                "retried": True,
+                "original_issues": verdict.issues,
+            }
+
+        # Sem retries — envia com warning
+        return {
+            "final_response": response,
+            "validated": False,
+            "issues": verdict.issues,
+        }
+
+    # ============================================
+    # MÉTRICAS
+    # ============================================
+
+    def get_metrics(self) -> dict:
+        """Métricas do pipeline para observabilidade"""
+        avg_timings = {}
+        for name, timings in self._gate_timings.items():
+            if timings:
+                avg_timings[name] = {
+                    "avg_ms": round(sum(timings) / len(timings), 2),
+                    "max_ms": round(max(timings), 2),
+                    "runs": len(timings),
+                }
+        return {
+            "total_runs": self._total_runs,
+            "total_failures": self._total_failures,
+            "success_rate": round(
+                (self._total_runs - self._total_failures) / max(self._total_runs, 1) * 100, 1
+            ),
+            "gate_timings": avg_timings,
+            "circuit_breakers": {
+                name: {
+                    "tripped": cb.tripped,
+                    "failures": cb.consecutive_failures,
+                }
+                for name, cb in self._breakers.items()
+                if cb.consecutive_failures > 0
+            },
+        }

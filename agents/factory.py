@@ -22,6 +22,7 @@ BUILTIN_AGENTS = {
         name="vision",
         description="Analisa imagens, screenshots e vídeos",
         agent_type="builtin",
+        model="nvidia/qwen/qwen2.5-vl-72b-instruct",  # v3.0: Modelo de visão dedicado
         system_prompt="""Você é o VISION, agente de análise visual do Open-PY.
 Sua função: analisar imagens e vídeos, extrair texto (OCR), descrever conteúdo,
 identificar elementos visuais. Responda em português brasileiro, direto e objetivo.
@@ -36,6 +37,7 @@ Se receber uma descrição de imagem, analise detalhadamente.""",
         name="builder",
         description="Cria código, scripts, debug, refatoração",
         agent_type="builtin",
+        model="nvidia/qwen/qwen3.5-coder-32b-instruct",  # v3.0: Modelo forte para código
         system_prompt="""Você é o BUILDER, agente de desenvolvimento do Open-PY.
 Sua função: escrever código, debugar, refatorar, criar scripts e resolver problemas técnicos.
 Linguagens: Python, JavaScript, Node.js, Bash, SQL, HTML/CSS.
@@ -69,6 +71,7 @@ Responda em português brasileiro.""",
         name="researcher",
         description="Pesquisa profunda na web e análise",
         agent_type="builtin",
+        model="nvidia/kimi-k2.5",  # v3.0: Modelo de raciocínio para pesquisa
         system_prompt="""Você é o RESEARCHER, agente de pesquisa do Open-PY.
 Sua função: fazer pesquisas na web, analisar resultados, sintetizar informações.
 Use a ferramenta web_search para buscar. Cite fontes quando possível.
