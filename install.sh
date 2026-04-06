@@ -17,7 +17,7 @@ VENV_DIR="$INSTALL_DIR/venv"
 DATA_DIR="$INSTALL_DIR/data"
 CONFIG_FILE="$INSTALL_DIR/openpy.toml"
 LOG_FILE="/var/log/open-py-install.log"
-OPENPY_VERSION="3.2.0-STABLE"
+OPENPY_VERSION="4.1.0-STABLE"
 ERRORS=0
 
 # ════════════════ CORES ════════════════
@@ -321,6 +321,63 @@ fi
 
 PKG_COUNT=$("$VENV_DIR/bin/pip" list 2>/dev/null | tail -n +3 | wc -l)
 ok "$PKG_COUNT pacotes instalados"
+
+# ═══════════════════════════════════════════════════════════
+# [4.5/8] OLLAMA (Embeddings para busca semântica)
+# ═══════════════════════════════════════════════════════════
+OLLAMA_INSTALLED=false
+EMBEDDING_MODEL="all-MiniLM-L6-v2"   # Fallback CPU padrão
+EMBEDDING_DIM=384
+
+if [[ "$TOTAL_RAM_MB" -ge 4096 ]]; then
+    header "[4.5/8] Ollama (Embeddings Semânticos)"
+    echo -e "  ${DIM}RAM disponível: ${TOTAL_RAM_MB}MB (≥4GB → Ollama habilitado)${NC}"
+    echo ""
+
+    if command -v ollama &>/dev/null; then
+        ok "Ollama já instalado"
+        OLLAMA_INSTALLED=true
+    else
+        step "Instalando Ollama..."
+        if curl -fsSL https://ollama.com/install.sh | sh >> "$LOG_FILE" 2>&1; then
+            ok "Ollama instalado"
+            OLLAMA_INSTALLED=true
+        else
+            warn "Falha ao instalar Ollama — usando embeddings CPU (all-MiniLM-L6-v2)"
+        fi
+    fi
+
+    if $OLLAMA_INSTALLED; then
+        # Garantir que Ollama está rodando
+        systemctl start ollama >> "$LOG_FILE" 2>&1 || ollama serve >> "$LOG_FILE" 2>&1 &
+        sleep 3
+
+        step "Baixando modelo de embeddings (bge-m3 ~ 567MB)..."
+        if ollama pull bge-m3 >> "$LOG_FILE" 2>&1; then
+            EMBEDDING_MODEL="bge-m3"
+            EMBEDDING_DIM=1024
+            ok "bge-m3 pronto (embeddings multilingual de alta qualidade)"
+        else
+            warn "bge-m3 falhou, tentando nomic-embed-text..."
+            if ollama pull nomic-embed-text >> "$LOG_FILE" 2>&1; then
+                EMBEDDING_MODEL="nomic-embed-text"
+                EMBEDDING_DIM=768
+                ok "nomic-embed-text pronto (fallback)"
+            else
+                warn "Nenhum modelo Ollama baixado — usando CPU fallback"
+                OLLAMA_INSTALLED=false
+            fi
+        fi
+
+        if $OLLAMA_INSTALLED; then
+            systemctl enable ollama >> "$LOG_FILE" 2>&1 || true
+            ok "Ollama configurado e habilitado no boot"
+        fi
+    fi
+else
+    info "RAM: ${TOTAL_RAM_MB}MB (<4GB) — Ollama desabilitado, usando embeddings CPU"
+    info "Modelo: all-MiniLM-L6-v2 (leve, ~90MB RAM)"
+fi
 
 # ═══════════════════════════════════════════════════════════
 # [5/8] PROVEDORES LLM (Interativo via /dev/tty)
@@ -709,9 +766,11 @@ context_save_interval_minutes = 60
 migration_hour = 0
 migration_minute = 0
 discard_md_after_migration = true
-embedding_model = "all-MiniLM-L6-v2"
-embedding_dimensions = 384
+embedding_model = "$EMBEDDING_MODEL"
+embedding_dimensions = $EMBEDDING_DIM
 max_search_results = 10
+ollama_url = "http://localhost:11434"
+ollama_enabled = $OLLAMA_INSTALLED
 
 [providers.openai]
 api_key = "$OPENAI_KEY"

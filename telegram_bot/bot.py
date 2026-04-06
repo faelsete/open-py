@@ -154,25 +154,25 @@ class TelegramBot:
 
                 "💾 <b>Memória</b>\n"
                 "/memory — Estatísticas de memória\n"
-                "/remember <texto> — Salvar fato manualmente\n"
-                "/recall <busca> — Buscar memórias (semântico)\n"
-                "/forget <id> — Esquecer memória específica\n\n"
+                "/remember &lt;texto&gt; — Salvar fato manualmente\n"
+                "/recall &lt;busca&gt; — Buscar memórias (semântico)\n"
+                "/forget &lt;id&gt; — Esquecer memória específica\n\n"
 
                 "🤖 <b>Agentes</b>\n"
                 "/agents — Listar agentes ativos\n"
-                "/spawn <nome> — Criar agente customizado\n"
-                "/kill <nome> — Destruir agente\n\n"
+                "/spawn &lt;nome&gt; — Criar agente customizado\n"
+                "/kill &lt;nome&gt; — Destruir agente\n\n"
 
                 "📋 <b>Tarefas</b>\n"
                 "/tasks — Ver tarefas em execução\n"
-                "/cancel <id> — Cancelar tarefa\n\n"
+                "/cancel &lt;id&gt; — Cancelar tarefa\n\n"
 
-                "🔌 <b>Provedores & Modelos</b>\n"
+                "🔌 <b>Provedores &amp; Modelos</b>\n"
                 "/providers — Listar provedores configurados\n"
-                "/provider <nome> — Trocar provedor ativo\n"
-                "/model <modelo> — Trocar modelo do provedor ativo\n"
-                "/addprovider <nome> <api_key> [url] — Adicionar provedor\n"
-                "/addmodel <provedor> <modelo> — Definir modelo para provedor\n\n"
+                "/provider &lt;nome&gt; — Trocar provedor ativo\n"
+                "/model &lt;modelo&gt; — Trocar modelo do provedor ativo\n"
+                "/addprovider &lt;nome&gt; &lt;api_key&gt; [url] — Adicionar provedor\n"
+                "/addmodel &lt;provedor&gt; &lt;modelo&gt; — Definir modelo para provedor\n\n"
 
                 "⚙️ <b>Config</b>\n"
                 "/config — Ver configuração atual\n"
@@ -708,15 +708,20 @@ class TelegramBot:
             return ""
 
     async def _send_long_message(self, message: types.Message, text: str):
-        """Envia mensagem longa dividida em chunks"""
+        """Envia mensagem longa dividida em chunks com fallback"""
         max_len = self.config.max_message_length
-        if len(text) <= max_len:
-            await message.reply(text)
-            return
 
-        chunks = [text[i:i+max_len] for i in range(0, len(text), max_len)]
+        chunks = [text[i:i+max_len] for i in range(0, len(text), max_len)] if len(text) > max_len else [text]
+
         for chunk in chunks:
-            await message.reply(chunk)
+            try:
+                await message.reply(chunk)
+            except Exception:
+                # Fallback: enviar sem parse_mode se HTML falhar
+                try:
+                    await message.reply(chunk, parse_mode=None)
+                except Exception as e:
+                    log.error("❌ Falha ao enviar mensagem", error=str(e))
 
     # ============================================
     # LIFECYCLE
