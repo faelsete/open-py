@@ -26,20 +26,22 @@ log = get_logger("pipeline")
 
 class ExecutionPipeline:
     """
-    Túnel de execução rígido: 6 gates sequenciais.
+    Túnel de execução rígido: 7 gates sequenciais.
 
     Gate 1 — CAPTURE:       Classifica input (tipo, urgência, continuação)
     Gate 2 — MEMORY_RECALL: Busca semântica por contexto relevante
     Gate 3 — ROUTE:         Decide: Core direto ou delegar para agente?
-    Gate 4 — PREPARE:       Monta contexto completo (SECURITY + histórico + memórias)
-    Gate 5 — EXECUTE:       Executa via Core LLM ou despacha para agente
-    Gate 6 — VALIDATE:      Quality gate — verifica resposta antes do envio
+    Gate 4 — THINK:         Raciocínio neural — planeja ANTES de agir
+    Gate 5 — PREPARE:       Monta contexto completo (SECURITY + histórico + memórias)
+    Gate 6 — EXECUTE:       Executa seguindo plano neural
+    Gate 7 — VALIDATE:      Quality gate — verifica resposta antes do envio
     """
 
     GATE_NAMES = [
         "capture",
         "memory_recall",
         "route",
+        "think",
         "prepare",
         "execute",
         "validate",
@@ -47,7 +49,7 @@ class ExecutionPipeline:
 
     def __init__(self, config: OpenPYConfig, brain=None, orchestrator=None,
                  memory_manager=None, llm_router=None, validator=None,
-                 feedback_loop=None):
+                 feedback_loop=None, neural_engine=None):
         self.config = config
         self.brain = brain
         self.orchestrator = orchestrator
@@ -55,6 +57,7 @@ class ExecutionPipeline:
         self.llm = llm_router
         self.validator = validator
         self.feedback_loop = feedback_loop
+        self.neural = neural_engine  # v4.1: Motor de raciocínio
 
         # Circuit breakers por gate
         self._breakers: dict[str, CircuitBreakerState] = {
@@ -71,6 +74,7 @@ class ExecutionPipeline:
             "capture": config.pipeline.gate_timeout_capture,
             "memory_recall": config.pipeline.gate_timeout_memory,
             "route": config.pipeline.gate_timeout_route,
+            "think": config.pipeline.gate_timeout_think,
             "prepare": config.pipeline.gate_timeout_prepare,
             "execute": config.pipeline.gate_timeout_execute,
             "validate": config.pipeline.gate_timeout_validate,
@@ -133,6 +137,12 @@ class ExecutionPipeline:
                     skip_reason="Desabilitado na config"
                 )
                 continue
+            if gate_name == "think" and not self.config.pipeline.gate_think:
+                gate_results[gate_name] = GateResult(
+                    gate_name=gate_name, passed=True, skipped=True,
+                    skip_reason="Desabilitado na config"
+                )
+                continue
 
             try:
                 timeout = self._timeouts.get(gate_name, 30)
@@ -163,7 +173,7 @@ class ExecutionPipeline:
                          timeout=self._timeouts.get(gate_name))
 
                 # Memory recall e validate são soft gates — timeout = skip
-                if gate_name in ("memory_recall", "validate"):
+                if gate_name in ("memory_recall", "validate", "think"):
                     gate_results[gate_name] = GateResult(
                         gate_name=gate_name, passed=True, skipped=True,
                         skip_reason=f"Timeout ({self._timeouts[gate_name]}s)",
@@ -186,7 +196,7 @@ class ExecutionPipeline:
                 log.error("❌ Gate falhou", gate=gate_name, error=str(e))
 
                 # Soft gates: skip em erro
-                if gate_name in ("memory_recall", "validate"):
+                if gate_name in ("memory_recall", "validate", "think"):
                     gate_results[gate_name] = GateResult(
                         gate_name=gate_name, passed=True, skipped=True,
                         skip_reason=f"Erro: {str(e)[:100]}",
@@ -424,15 +434,57 @@ class ExecutionPipeline:
         }
 
     # ============================================
-    # GATE 4: PREPARE — Montar contexto completo
+    # GATE 4: THINK — Raciocínio neural
+    #   "Como posso fazer isso? Já fiz antes? Qual melhor caminho?"
+    # ============================================
+
+    async def _gate_think(self, ctx: dict, prev: dict) -> dict:
+        """Raciocínio neural: planeja ANTES de agir.
+        Produz ThoughtChain com steps, ferramentas e verificações."""
+        if not self.neural:
+            return {"thought_chain": None, "reason": "neural engine não disponível"}
+
+        memories = ctx.get("memories", [])
+        attachments = ctx.get("attachments", [])
+        itype = ctx.get("input_type_resolved")
+
+        chain = await self.neural.think(
+            task=ctx["raw_input"],
+            input_type=itype.value if itype else "text",
+            memories=memories,
+            attachments=attachments,
+        )
+
+        ctx["thought_chain"] = chain
+
+        log.info("🧠 Plano neural",
+                 steps=chain.total_steps,
+                 approach=chain.chosen_approach[:80],
+                 confidence=chain.confidence,
+                 sandbox=chain.requires_sandbox)
+
+        return {
+            "analysis": chain.task_analysis,
+            "approach": chain.chosen_approach,
+            "steps": chain.total_steps,
+            "confidence": chain.confidence,
+            "sandbox": chain.requires_sandbox,
+            "multi_task": chain.is_multi_task,
+            "thinking_ms": chain.thinking_time_ms,
+        }
+
+    # ============================================
+    # GATE 5: PREPARE — Montar contexto completo
     # ============================================
 
     async def _gate_prepare(self, ctx: dict, prev: dict) -> dict:
-        """Monta contexto completo para execução"""
+        """Monta contexto completo para execução.
+        v4.1: Injeta plano neural no contexto do LLM."""
         from core.brain import build_core_system_prompt
 
         thinking: ThinkingResult = ctx.get("thinking")
         memories = ctx.get("memories", [])
+        thought_chain = ctx.get("thought_chain")
 
         # System prompt com soul + essence
         system_prompt = build_core_system_prompt(ctx.get("soul", ""), ctx.get("essence", ""))
@@ -440,16 +492,32 @@ class ExecutionPipeline:
         # Injetar memórias no contexto
         if memories:
             memory_block = "\n## Memórias relevantes (recuperação semântica)\n"
-            for mem in memories[:8]:  # Max 8 memórias no contexto
+            for mem in memories[:8]:
                 content = mem.get("content", "")
                 tags = mem.get("tags", [])
                 tag_str = f" [{', '.join(tags[:3])}]" if tags else ""
                 memory_block += f"- {content}{tag_str}\n"
             system_prompt += f"\n{memory_block}"
 
+        # v4.1: Injetar plano neural no contexto
+        if thought_chain and thought_chain.steps:
+            plan_block = "\n## Plano de execução (gerado pelo raciocínio neural)\n"
+            plan_block += f"**Análise:** {thought_chain.task_analysis}\n"
+            plan_block += f"**Abordagem:** {thought_chain.chosen_approach}\n"
+            plan_block += f"**Confiança:** {thought_chain.confidence}\n"
+            if thought_chain.requires_sandbox:
+                plan_block += "**⚠️ Usar ambiente sandbox isolado**\n"
+            plan_block += "\n**Steps:**\n"
+            for step in thought_chain.steps:
+                tool_info = f" [tool: {step.tool}]" if step.tool else ""
+                agent_info = f" [agente: {step.agent}]" if step.agent else ""
+                plan_block += f"{step.step_number}. {step.action}{tool_info}{agent_info}\n"
+            plan_block += "\nSIGA ESTE PLANO. Execute cada step na ordem. Use as ferramentas indicadas.\n"
+            system_prompt += f"\n{plan_block}"
+
         ctx["system_prompt"] = system_prompt
 
-        # Montar mensagens completas para o LLM
+        # Montar mensagens completas
         history = ctx.get("history", [])
         messages = [
             {"role": "system", "content": system_prompt},
@@ -462,15 +530,18 @@ class ExecutionPipeline:
             "system_prompt_tokens": len(system_prompt) // 4,
             "history_messages": len(history),
             "memory_injected": len(memories),
+            "neural_plan_injected": bool(thought_chain and thought_chain.steps),
         }
 
     # ============================================
-    # GATE 5: EXECUTE — Execução real
+    # GATE 6: EXECUTE — Execução seguindo plano neural
     # ============================================
 
     async def _gate_execute(self, ctx: dict, prev: dict) -> dict:
-        """Executa via Core LLM ou despacha para agente"""
+        """Executa via Core LLM ou despacha para agente.
+        v4.1: Segue plano neural. Pós-execução salva aprendizado."""
         thinking: ThinkingResult = ctx.get("thinking")
+        thought_chain = ctx.get("thought_chain")
 
         # Delegação para agente
         if thinking and thinking.target_agent and self.orchestrator:
@@ -480,22 +551,49 @@ class ExecutionPipeline:
                 conversation_history=ctx.get("history", [])[-10:]
             )
             response = result.output or result.error or "Sem resultado"
+            success = result.status == TaskStatus.COMPLETED
+
+            # v4.1: Pós-execução — salvar aprendizado
+            if thought_chain and self.neural:
+                # Marcar steps conforme resultado
+                for step in thought_chain.steps:
+                    step.status = "done" if success else "failed"
+                    step.result = response[:200]
+                await self.neural.learn_from_execution(
+                    chain=thought_chain,
+                    final_result=response[:500],
+                    success=success,
+                )
+
             return {
                 "response": response,
                 "task_id": result.task_id,
                 "delegated_to": thinking.target_agent,
                 "status": result.status.value,
+                "neural_learning": True,
             }
 
         # Core responde diretamente via LLM
         if self.llm:
             messages = ctx.get("messages", [])
             response = await self.llm.complete(messages=messages)
+
+            # v4.1: Pós-execução — salvar aprendizado
+            if thought_chain and self.neural:
+                for step in thought_chain.steps:
+                    step.status = "done"
+                await self.neural.learn_from_execution(
+                    chain=thought_chain,
+                    final_result=response[:500],
+                    success=True,
+                )
+
             return {
                 "response": response,
                 "task_id": None,
                 "delegated_to": None,
                 "status": "completed",
+                "neural_learning": True,
             }
 
         return {

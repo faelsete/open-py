@@ -88,11 +88,12 @@ class OllamaConfig(BaseModel):
 
 
 class PipelineConfig(BaseModel):
-    """Configuração do túnel de execução v3.0"""
+    """Configuração do túnel de execução v4.1"""
     enabled: bool = True
     # Gates individuais (todos ON por padrão)
     gate_memory_recall: bool = True
     gate_validate: bool = True
+    gate_think: bool = True        # v4.1: Raciocínio neural
     # Circuit breaker
     max_gate_failures: int = 3
     gate_cooldown_minutes: int = 5
@@ -100,6 +101,7 @@ class PipelineConfig(BaseModel):
     gate_timeout_capture: int = 5
     gate_timeout_memory: int = 10
     gate_timeout_route: int = 5
+    gate_timeout_think: int = 30   # v4.1: Tempo para raciocinar
     gate_timeout_prepare: int = 5
     gate_timeout_execute: int = 300
     gate_timeout_validate: int = 15

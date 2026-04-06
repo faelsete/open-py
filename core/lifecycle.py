@@ -53,6 +53,7 @@ class OpenPY:
         self.validator = None
         self.extractor = None
         self.feedback_loop = None
+        self.neural_engine = None  # v4.1: Motor de raciocínio
 
         # Histórico conversacional por usuário (RAM)
         # Chave: user_id (int) → Valor: lista de {role, content}
@@ -129,7 +130,17 @@ class OpenPY:
         )
         log.info("✅ Memory Extractor pronto")
 
-        # 11. v3.0: Pipeline (Túnel Rígido)
+        # 11. v4.1: Neural Engine (Raciocínio antes de agir)
+        from core.neural import NeuralEngine
+        self.neural_engine = NeuralEngine(
+            llm_router=self.llm_router,
+            memory_manager=self.memory_manager,
+            tool_registry=getattr(self, 'tool_registry', None),
+            agent_registry=self.agent_registry,
+        )
+        log.info("✅ Neural Engine pronto (raciocínio antes da ação)")
+
+        # 12. v4.1: Pipeline (Túnel Rígido — 7 gates com Neural)
         from core.pipeline import ExecutionPipeline
         self.pipeline = ExecutionPipeline(
             config=self.config,
@@ -138,8 +149,9 @@ class OpenPY:
             memory_manager=self.memory_manager,
             llm_router=self.llm_router,
             validator=self.validator,
+            neural_engine=self.neural_engine,
         )
-        log.info("✅ Pipeline v3.0 pronto (6 gates)")
+        log.info("✅ Pipeline v4.1 pronto (7 gates + Neural Thinking)")
 
         # 12. v3.0: Feedback Loop
         from core.feedback_loop import FeedbackLoop
@@ -163,7 +175,7 @@ class OpenPY:
             self.memory_manager.llm_router = self.llm_router
 
         self._running = True
-        log.info("🚀 Open-PY v3.0 pronto e operacional! (Pipeline + Quality Gate + Feedback Loop)")
+        log.info("🚀 Open-PY v4.1 pronto! (Neural Thinking + Tool Engine + Pipeline 7 Gates)")
 
     # ============================================
     # RUNNING

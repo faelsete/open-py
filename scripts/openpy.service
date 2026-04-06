@@ -1,0 +1,34 @@
+[Unit]
+Description=Open-PY AI Agent System v4.1
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=openpy
+Group=openpy
+WorkingDirectory=/opt/open-py
+ExecStart=/opt/open-py/venv/bin/python -m main
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Env
+EnvironmentFile=/opt/open-py/.env
+
+# Watchdog: se não receber heartbeat em 120s, reinicia
+WatchdogSec=120
+
+# Limites de segurança
+MemoryMax=4G
+CPUQuota=80%
+TasksMax=200
+
+# Logs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=open-py
+
+[Install]
+WantedBy=multi-user.target
