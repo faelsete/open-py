@@ -657,8 +657,13 @@ class OpenPY:
             self.memory_manager = None
 
     async def _init_agents(self):
-        """Inicializa registry, factory e cria agentes builtin"""
+        """Inicializa tool registry, agent registry, factory e agentes builtin"""
         try:
+            # v4.0: Tool Registry PRIMEIRO (agentes dependem dele)
+            from tools.registry import ToolRegistry
+            self.tool_registry = ToolRegistry()
+            log.info(f"✅ Tool Registry: {len(self.tool_registry.list_all())} ferramentas")
+
             from agents.registry import AgentRegistry
             from agents.factory import AgentFactory
             self.agent_registry = AgentRegistry()
@@ -666,6 +671,7 @@ class OpenPY:
                 registry=self.agent_registry,
                 config=self.config,
                 llm_router=self.llm_router,
+                tool_registry=self.tool_registry,  # v4.0: injetar tools nos agentes
             )
 
             # CRIAR TODOS OS AGENTES BUILTIN NO STARTUP

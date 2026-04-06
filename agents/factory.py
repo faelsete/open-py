@@ -35,15 +35,29 @@ Se receber uma descrição de imagem, analise detalhadamente.""",
     "builder": AgentConfig(
         agent_id="builder",
         name="builder",
-        description="Cria código, scripts, debug, refatoração",
+        description="Cria código, scripts, debug, refatoração, PDFs, planilhas",
         agent_type="builtin",
-        model="nvidia/qwen/qwen3.5-coder-32b-instruct",  # v3.0: Modelo forte para código
+        model="nvidia/qwen/qwen3.5-coder-32b-instruct",
         system_prompt="""Você é o BUILDER, agente de desenvolvimento do Open-PY.
 Sua função: escrever código, debugar, refatorar, criar scripts e resolver problemas técnicos.
 Linguagens: Python, JavaScript, Node.js, Bash, SQL, HTML/CSS.
-Regras: código limpo, com tratamento de erros, comentários quando necessário.
+
+VOCÊ TEM FERRAMENTAS. USE-AS OBRIGATORIAMENTE:
+- shell_exec: para executar comandos no terminal
+- write_file/read_file: para criar e ler arquivos
+- python_exec: para testar código Python
+- create_pdf/create_csv/create_xlsx: para gerar documentos
+- download_file: para baixar arquivos da internet
+- pip_install: para instalar pacotes Python
+
+NUNCA apenas sugira comandos. EXECUTE-OS usando as ferramentas.
+Regras: código limpo, tratamento de erros, comentários quando necessário.
 Responda em português brasileiro.""",
-        allowed_tools=["shell_exec", "file_ops", "http_client"],
+        allowed_tools=["shell_exec", "read_file", "write_file", "list_files",
+                       "delete_file", "http_get", "python_exec",
+                       "create_pdf", "create_csv", "create_xlsx", "read_pdf",
+                       "download_file", "pip_install", "system_info",
+                       "move_file", "copy_file", "find_files"],
         can_exec_commands=True,
         can_write_files=True,
         can_access_network=True,
@@ -57,10 +71,18 @@ Responda em português brasileiro.""",
         agent_type="builtin",
         system_prompt="""Você é o CLEANER, agente de limpeza do Open-PY.
 Sua função: limpar arquivos temporários, logs antigos, resíduos de agentes deletados.
+
+USE as ferramentas para executar a limpeza de verdade:
+- list_files: para ver o que existe
+- delete_file: para remover arquivos
+- find_files: para buscar por padrão
+- move_file: para reorganizar
+
 REGRA ABSOLUTA: NUNCA delete arquivos fora das pastas autorizadas.
 Pastas autorizadas: /opt/open-py/data/media/, /opt/open-py/data/agents/, /tmp/open-py/
 Responda em português brasileiro.""",
-        allowed_tools=["file_ops"],
+        allowed_tools=["list_files", "delete_file", "find_files", "move_file",
+                       "read_file", "copy_file"],
         can_write_files=True,
         can_exec_commands=False,
         allowed_paths=["/opt/open-py/data/media/", "/opt/open-py/data/agents/", "/tmp/open-py/"],
@@ -69,16 +91,27 @@ Responda em português brasileiro.""",
     "researcher": AgentConfig(
         agent_id="researcher",
         name="researcher",
-        description="Pesquisa profunda na web e análise",
+        description="Pesquisa profunda na web, navegação e análise",
         agent_type="builtin",
-        model="nvidia/kimi-k2.5",  # v3.0: Modelo de raciocínio para pesquisa
+        model="nvidia/kimi-k2.5",
         system_prompt="""Você é o RESEARCHER, agente de pesquisa do Open-PY.
 Sua função: fazer pesquisas na web, analisar resultados, sintetizar informações.
-Use a ferramenta web_search para buscar. Cite fontes quando possível.
-Responda em português brasileiro, de forma organizada e detalhada.""",
-        allowed_tools=["web_search", "http_client"],
+
+VOCÊ TEM FERRAMENTAS. USE-AS OBRIGATORIAMENTE:
+- web_search: busca rápida via DuckDuckGo
+- browser_navigate: abre URLs para ler conteúdo completo
+- browser_get_text: extrai texto de páginas
+- browser_screenshot: captura visual de páginas
+- http_get: requisições HTTP diretas
+
+FLUXO: web_search → encontrar URLs → browser_navigate → browser_get_text → sintetizar
+Cite fontes com URLs. Responda em português brasileiro.""",
+        allowed_tools=["web_search", "http_get", "browser_navigate",
+                       "browser_get_text", "browser_screenshot",
+                       "browser_click", "browser_type", "browser_wait",
+                       "browser_close"],
         can_access_network=True,
-        can_write_files=False,
+        can_write_files=True,
         sandbox_network=True,
     ),
 
@@ -89,11 +122,22 @@ Responda em português brasileiro, de forma organizada e detalhada.""",
         agent_type="builtin",
         system_prompt="""Você é o TRANSCRIBER, agente de transcrição do Open-PY.
 Sua função: transcrever áudios recebidos para texto.
-Se receber uma transcrição, formate-a de forma limpa e legível.
+
+USE as ferramentas:
+- shell_exec: para rodar ffmpeg e whisper
+- read_file: para ler transcrições geradas
+- write_file: para salvar transcrições
+
+FLUXO OBRIGATÓRIO para áudios:
+1. shell_exec('ffmpeg -i input.ogg -ar 16000 -ac 1 output.wav')
+2. shell_exec('whisper output.wav --language pt --model small')
+3. read_file para pegar o resultado
+4. Formatar e retornar texto limpo
+
 Responda em português brasileiro.""",
-        allowed_tools=["file_ops"],
+        allowed_tools=["shell_exec", "read_file", "write_file", "list_files"],
         can_write_files=True,
-        can_exec_commands=True,  # Para rodar ffmpeg/whisper
+        can_exec_commands=True,
     ),
 
     "agent_creator": AgentConfig(
@@ -135,10 +179,11 @@ class AgentFactory:
     """Fábrica de agentes"""
 
     def __init__(self, registry: AgentRegistry, config: OpenPYConfig,
-                 llm_router=None):
+                 llm_router=None, tool_registry=None):
         self.registry = registry
         self.config = config
         self.llm = llm_router
+        self.tool_registry = tool_registry  # v4.0
 
     async def create_builtin(self, name: str) -> AgentBase:
         """Cria e registra um agente builtin"""
@@ -146,9 +191,11 @@ class AgentFactory:
             raise ValueError(f"Agente builtin '{name}' não existe")
 
         agent_config = BUILTIN_AGENTS[name].model_copy()
-        agent = AgentBase(config=agent_config, llm_router=self.llm)
+        agent = AgentBase(config=agent_config, llm_router=self.llm,
+                          tool_registry=self.tool_registry)  # v4.0
         self.registry.register(agent)
-        log.info("✅ Agente builtin criado", name=name)
+        log.info("✅ Agente builtin criado", name=name,
+                 tools=len(agent_config.allowed_tools))
         return agent
 
     async def create_custom(self, spec: dict) -> AgentBase:
@@ -166,7 +213,8 @@ class AgentFactory:
             can_read_memory=spec.get("permissions", {}).get("read_memory", False),
         )
 
-        agent = AgentBase(config=agent_config, llm_router=self.llm)
+        agent = AgentBase(config=agent_config, llm_router=self.llm,
+                          tool_registry=self.tool_registry)  # v4.0
         self.registry.register(agent)
         log.info("✅ Agente customizado criado", name=agent_config.name)
         return agent

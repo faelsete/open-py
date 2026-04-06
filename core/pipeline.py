@@ -240,14 +240,17 @@ class ExecutionPipeline:
     # ============================================
 
     async def _gate_capture(self, ctx: dict, prev: dict) -> dict:
-        """Classifica input: tipo, urgência, continuação"""
+        """Classifica input: tipo, urgência, continuação.
+        v4.0: Detecta mídia e FORÇA routing adequado."""
         from core.brain import classify_input_local
 
         input_type_str = ctx["input_type"]
-        has_photo = any(a.endswith(('.jpg', '.png', '.webp')) for a in ctx["attachments"])
-        has_audio = any(a.endswith(('.ogg', '.mp3', '.wav', '.m4a')) for a in ctx["attachments"])
-        has_video = any(a.endswith(('.mp4', '.webm', '.mov')) for a in ctx["attachments"])
-        has_doc = any(a.endswith(('.pdf', '.docx', '.xlsx', '.txt')) for a in ctx["attachments"])
+        has_photo = any(a.endswith(('.jpg', '.png', '.webp', '.gif', '.bmp')) for a in ctx["attachments"])
+        has_audio = any(a.endswith(('.ogg', '.mp3', '.wav', '.m4a', '.opus', '.flac')) for a in ctx["attachments"])
+        has_video = any(a.endswith(('.mp4', '.webm', '.mov', '.avi', '.mkv')) for a in ctx["attachments"])
+        has_pdf = any(a.endswith('.pdf') for a in ctx["attachments"])
+        has_xlsx = any(a.endswith(('.xlsx', '.xls', '.csv')) for a in ctx["attachments"])
+        has_doc = any(a.endswith(('.pdf', '.docx', '.xlsx', '.txt', '.csv')) for a in ctx["attachments"])
 
         try:
             itype = InputType(input_type_str)
@@ -264,7 +267,55 @@ class ExecutionPipeline:
             )
 
         ctx["input_type_resolved"] = itype
-        return {"input_type": itype.value, "classified": True}
+
+        # ============================================
+        # v4.0: FORCED ROUTING POR TIPO DE MÍDIA
+        # Igual Claude: reconhece o input e FORÇA a tool correta
+        # ============================================
+        forced_agent = None
+        forced_tools = []
+        forced_pre_process = None
+
+        if has_audio:
+            # Áudio chegou → OBRIGATÓRIO: transcrever primeiro
+            forced_agent = "transcriber"
+            forced_tools = ["shell_exec", "read_file", "write_file"]
+            forced_pre_process = "transcribe_audio"
+            log.info("🎤 Áudio detectado → FORÇANDO transcriber")
+
+        elif has_pdf:
+            # PDF chegou → OBRIGATÓRIO: ler PDF antes de processar
+            forced_tools = ["read_pdf"]
+            forced_pre_process = "read_pdf"
+            log.info("📄 PDF detectado → FORÇANDO read_pdf")
+
+        elif has_photo:
+            # Imagem chegou → OBRIGATÓRIO: agente de visão
+            forced_agent = "vision"
+            log.info("📷 Imagem detectada → FORÇANDO vision")
+
+        elif has_video:
+            # Vídeo chegou → OBRIGATÓRIO: agente de visão
+            forced_agent = "vision"
+            log.info("🎬 Vídeo detectado → FORÇANDO vision")
+
+        elif has_xlsx:
+            # Planilha/CSV → ler antes de processar
+            forced_tools = ["read_file"]
+            forced_pre_process = "read_spreadsheet"
+            log.info("📊 Planilha detectada → FORÇANDO read_file")
+
+        ctx["forced_agent"] = forced_agent
+        ctx["forced_tools"] = forced_tools
+        ctx["forced_pre_process"] = forced_pre_process
+
+        return {
+            "input_type": itype.value,
+            "classified": True,
+            "forced_agent": forced_agent,
+            "forced_tools": forced_tools,
+            "forced_pre_process": forced_pre_process,
+        }
 
     # ============================================
     # GATE 2: MEMORY RECALL — Busca semântica
@@ -328,12 +379,35 @@ class ExecutionPipeline:
     # ============================================
 
     async def _gate_route(self, ctx: dict, prev: dict) -> dict:
-        """Decide: Core direto ou delegar para agente?"""
+        """Decide: Core direto ou delegar para agente?
+        v4.0: Respeita forced_agent do CAPTURE gate."""
         if not self.brain:
             return {"target_agent": None, "reason": "brain não disponível"}
 
         itype = ctx.get("input_type_resolved", InputType.UNKNOWN)
 
+        # v4.0: FORCED ROUTING tem prioridade absoluta
+        forced_agent = ctx.get("forced_agent")
+        if forced_agent:
+            log.info(f"🎯 Rota FORÇADA: {forced_agent}")
+            # Criar ThinkingResult mínimo para o forced agent
+            from shared.models import ThinkingResult, Urgency
+            thinking = ThinkingResult(
+                raw_input=ctx["raw_input"],
+                input_type=itype,
+                target_agent=forced_agent,
+                delegation_reason=f"Forçado por tipo de mídia: {itype.value}",
+                urgency=Urgency.NORMAL,
+            )
+            ctx["thinking"] = thinking
+            return {
+                "target_agent": forced_agent,
+                "reason": f"FORÇADO por mídia ({itype.value})",
+                "urgency": "normal",
+                "forced": True,
+            }
+
+        # Roteamento normal via brain
         thinking = await self.brain.think(
             text=ctx["raw_input"],
             input_type=itype,
@@ -346,6 +420,7 @@ class ExecutionPipeline:
             "reason": thinking.delegation_reason,
             "urgency": thinking.urgency.value,
             "task_id": thinking.task_id,
+            "forced": False,
         }
 
     # ============================================

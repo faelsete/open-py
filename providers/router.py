@@ -299,3 +299,84 @@ class LLMRouter:
             raise NoProviderAvailableError(
                 f"Todos os provedores falharam: {self._model_names}"
             )
+
+    async def complete_with_tools(self, messages: list, tools: list[dict],
+                                  model: str = None, max_tokens: int = 4096,
+                                  temperature: float = 0.7,
+                                  tool_choice: str = "auto",
+                                  **kwargs) -> dict:
+        """
+        v4.0: Chamada LLM COM suporte a function calling.
+        
+        Retorna dict com:
+        - "content": texto da resposta (ou None se tool_call)
+        - "tool_calls": lista de tool calls [{id, function: {name, arguments}}]
+        - "finish_reason": "stop" | "tool_calls"
+        
+        Args:
+            tools: Lista de schemas OpenAI (output de tools_to_schemas)
+            tool_choice: "auto" | "required" | "none" | {"type": "function", "function": {"name": "X"}}
+        """
+        if not self._available or not self.router:
+            raise NoProviderAvailableError("Nenhum provedor LLM configurado")
+
+        target_model = model or self._active_provider or self._model_names[0]
+
+        call_kwargs = {
+            "model": target_model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "request_timeout": 90,
+            **kwargs,
+        }
+
+        # Só enviar tools se lista não vazia
+        if tools:
+            call_kwargs["tools"] = tools
+            call_kwargs["tool_choice"] = tool_choice
+
+        try:
+            log.info(f"🔧 LLM + Tools: {target_model} ({len(tools)} tools)")
+            response = await self.router.acompletion(**call_kwargs)
+            
+            choice = response.choices[0]
+            message = choice.message
+
+            result = {
+                "content": message.content,
+                "tool_calls": None,
+                "finish_reason": choice.finish_reason,
+            }
+
+            # Extrair tool_calls se existirem
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                result["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        }
+                    }
+                    for tc in message.tool_calls
+                ]
+                result["finish_reason"] = "tool_calls"
+
+            return result
+
+        except Exception as e:
+            log.warning(f"⚠️ Tool calling falhou: {e}")
+            # Fallback: chamar sem tools (texto puro)
+            try:
+                fallback = await self.complete(messages=messages, model=model,
+                                               max_tokens=max_tokens,
+                                               temperature=temperature)
+                return {
+                    "content": fallback,
+                    "tool_calls": None,
+                    "finish_reason": "stop",
+                }
+            except Exception:
+                raise
+
