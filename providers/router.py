@@ -355,6 +355,7 @@ class LLMRouter:
                                   model: str = None, max_tokens: int = 4096,
                                   temperature: float = 0.7,
                                   tool_choice: str = "auto",
+                                  thinking: bool = True,
                                   **kwargs) -> dict:
         """
         v4.0: Chamada LLM COM suporte a function calling.
@@ -381,6 +382,10 @@ class LLMRouter:
             "request_timeout": 90,
             **kwargs,
         }
+        if thinking and "extra_body" not in call_kwargs:
+            call_kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": True}
+            }
 
         # Só enviar tools se lista não vazia
         if tools:
@@ -481,6 +486,7 @@ class LLMRouter:
                                          model: str = None, max_tokens: int = 4096,
                                          temperature: float = 0.7,
                                          tool_choice: str = "auto",
+                                         thinking: bool = True,
                                          **kwargs):
         """
         Streaming support with tools.
@@ -503,6 +509,10 @@ class LLMRouter:
             "stream": True,
             **kwargs,
         }
+        if thinking and "extra_body" not in call_kwargs:
+            call_kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": True}
+            }
 
         if tools:
             call_kwargs["tools"] = tools
