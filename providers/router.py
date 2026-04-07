@@ -247,6 +247,25 @@ class LLMRouter:
         }
 
     # ============================================
+    # RESPONSE EXTRACTION
+    # ============================================
+
+    def _extract_content(self, response) -> str:
+        """Extrai conteúdo da resposta LLM.
+        Alguns modelos (GLM, thinking models) usam reasoning_content ao invés de content.
+        """
+        msg = response.choices[0].message
+        content = getattr(msg, 'content', None)
+        if content:
+            return content
+        # Fallback: modelos com thinking (GLM, etc.) podem usar reasoning_content
+        reasoning = getattr(msg, 'reasoning_content', None)
+        if reasoning:
+            return reasoning
+        # Último recurso
+        return str(msg) if msg else ""
+
+    # ============================================
     # COMPLETION
     # ============================================
 
@@ -269,7 +288,7 @@ class LLMRouter:
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                request_timeout=180,  # v4.1: Gemma-4 31B precisa de tempo
+                request_timeout=120,
                 **kwargs,
             )
             # v4.1: Log de tokens consumidos
@@ -280,7 +299,7 @@ class LLMRouter:
                          prompt=getattr(usage, 'prompt_tokens', '?'),
                          completion=getattr(usage, 'completion_tokens', '?'),
                          total=getattr(usage, 'total_tokens', '?'))
-            return response.choices[0].message.content
+            return self._extract_content(response)
 
         except Exception as e:
             log.warning(f"⚠️ Falha no provedor {target_model}: {str(e)}")
@@ -296,7 +315,7 @@ class LLMRouter:
                         messages=messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
-                        request_timeout=180,  # v4.1: Timeout no fallback também
+                        request_timeout=120,
                         **kwargs,
                     )
                     usage = getattr(response, 'usage', None)
@@ -306,7 +325,7 @@ class LLMRouter:
                                  prompt=getattr(usage, 'prompt_tokens', '?'),
                                  completion=getattr(usage, 'completion_tokens', '?'),
                                  total=getattr(usage, 'total_tokens', '?'))
-                    return response.choices[0].message.content
+                    return self._extract_content(response)
                 except Exception as ef:
                     log.error(f"❌ Falha no fallback {fallback}: {str(ef)}")
                     continue
