@@ -22,6 +22,7 @@ from shared.config import CoreConfig, TelegramConfig
 from shared.logger import setup_logging, get_logger
 from .updater import MessageUpdater
 from core.audit_log import AuditLog
+from core.rate_limiter import RateLimiter
 
 log = get_logger("telegram")
 
