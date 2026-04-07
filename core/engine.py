@@ -181,10 +181,8 @@ class QueryEngine:
         else:
             if self.brain:
                 thinking = await self.brain.think(
-                    raw_input=raw_input,
-                    input_type=itype.value,
-                    history=ctx["history"][-3:],
-                    memories=memories,
+                    text=raw_input,
+                    input_type=itype,
                     attachments=attachments
                 )
             else:
