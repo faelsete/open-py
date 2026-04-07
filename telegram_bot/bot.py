@@ -20,10 +20,8 @@ from core.lifecycle import OpenPY
 from core.message_queue import MessageBatcher, TaskQueue, QueuedTask, Priority
 from shared.config import CoreConfig, TelegramConfig
 from shared.logger import setup_logging, get_logger
-from .learner import FastLearner
 from .updater import MessageUpdater
 from core.audit_log import AuditLog
-from core.auto_learner import AutoLearner
 
 log = get_logger("telegram")
 
