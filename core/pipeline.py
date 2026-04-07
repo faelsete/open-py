@@ -675,7 +675,8 @@ class ExecutionPipeline:
         # Core responde diretamente via LLM
         if self.llm:
             messages = ctx.get("messages", [])
-            response = await self.llm.complete(messages=messages)
+            # v4.2: max_tokens limitado — evita respostas de 800+ tokens pra perguntas simples
+            response = await self.llm.complete(messages=messages, max_tokens=1024)
 
             # v4.1: Pós-execução — salvar aprendizado
             if thought_chain and self.neural:

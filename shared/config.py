@@ -93,7 +93,7 @@ class PipelineConfig(BaseModel):
     enabled: bool = True
     # Gates individuais (todos ON por padrão)
     gate_memory_recall: bool = True
-    gate_validate: bool = True
+    gate_validate: bool = False  # v4.2: OFF (2ª chamada LLM desnecessária, +17s latência)
     gate_think: bool = False       # v4.1: OFF — evita chamada LLM duplicada (think+execute em paralelo sobrecarrega API)
     # Circuit breaker
     max_gate_failures: int = 3

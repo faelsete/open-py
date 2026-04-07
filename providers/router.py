@@ -102,7 +102,7 @@ class LLMRouter:
         self.router = LiteLLMRouter(
             model_list=self._model_list,
             retry_after=5,
-            num_retries=2,
+            num_retries=1,     # v4.2: 1 retry (2 causava latência dobrada)
         )
         self._available = True
         self._model_names = [m["model_name"] for m in self._model_list]
