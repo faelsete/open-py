@@ -590,8 +590,8 @@ class MemoryManager:
 
     async def _get_embedding(self, text: str) -> Optional[list[float]]:
         """
-        v3.0: Gera embedding via Ollama (GPU) ou sentence-transformers (CPU fallback).
-        Ollama: nomic-embed-text (768 dims, 8192 token context)
+        v4.1: Gera embedding via Ollama (CPU/GPU) ou sentence-transformers (CPU fallback).
+        Ollama: bge-m3 (1024 dims, multilingual) — padrão quando RAM >= 4GB
         Fallback: all-MiniLM-L6-v2 (384 dims, CPU)
         """
         # === CAMINHO 1: Ollama (se disponível e habilitado) ===

@@ -769,8 +769,13 @@ discard_md_after_migration = true
 embedding_model = "$EMBEDDING_MODEL"
 embedding_dimensions = $EMBEDDING_DIM
 max_search_results = 10
-ollama_url = "http://localhost:11434"
-ollama_enabled = $OLLAMA_INSTALLED
+
+[ollama]
+enabled = "$(if $OLLAMA_INSTALLED; then echo on; else echo off; fi)"
+url = "http://localhost:11434"
+embedding_model = "$EMBEDDING_MODEL"
+embedding_dimensions = $EMBEDDING_DIM
+request_timeout = 15
 
 [providers.openai]
 api_key = "$OPENAI_KEY"

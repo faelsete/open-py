@@ -68,10 +68,10 @@ class OllamaConfig(BaseModel):
     """Configuração do Ollama para embeddings locais (GPU-accelerated)"""
     enabled: str = "auto"    # "auto" | "on" | "off"
     url: str = "http://localhost:11434"
-    embedding_model: str = "nomic-embed-text"
-    embedding_dimensions: int = 768
+    embedding_model: str = "bge-m3"        # Padrão do instalador
+    embedding_dimensions: int = 1024
     min_ram_gb: int = 4      # RAM mínima para auto-enable
-    request_timeout: int = 10  # Timeout em segundos para API call
+    request_timeout: int = 15  # Timeout em segundos para API call
 
     def should_enable(self) -> bool:
         """Auto-detect: ON se RAM >= min_ram_gb, OFF caso contrário"""
@@ -100,12 +100,12 @@ class PipelineConfig(BaseModel):
     gate_cooldown_minutes: int = 5
     # Timeouts por gate (segundos)
     gate_timeout_capture: int = 5
-    gate_timeout_memory: int = 10
+    gate_timeout_memory: int = 30    # v4.1: Aumentado (1ª carga do modelo de embeddings pode demorar)
     gate_timeout_route: int = 5
-    gate_timeout_think: int = 30   # v4.1: Tempo para raciocinar
+    gate_timeout_think: int = 60     # v4.1: Aumentado (reasoning completo precisa de tempo)
     gate_timeout_prepare: int = 5
     gate_timeout_execute: int = 300
-    gate_timeout_validate: int = 15
+    gate_timeout_validate: int = 30  # v4.1: Aumentado (validação também chama LLM)
 
 
 class ValidatorConfig(BaseModel):
