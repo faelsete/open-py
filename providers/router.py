@@ -283,13 +283,21 @@ class LLMRouter:
 
         try:
             log.info(f"🚀 Chamada LLM: {target_model}")
+            # v4.2: Desligar thinking mode do GLM/modelos com raciocínio
+            # Sem isso, o modelo gasta TODOS os tokens no pensamento interno
+            # e nunca gera a resposta real (retorna reasoning_content em inglês)
+            call_kwargs = dict(kwargs)
+            if "extra_body" not in call_kwargs:
+                call_kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": False}
+                }
             response = await self.router.acompletion(
                 model=target_model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                request_timeout=120,
-                **kwargs,
+                request_timeout=60,  # v4.2: 60s (prompt agora é ~200 tokens)
+                **call_kwargs,
             )
             # v4.1: Log de tokens consumidos
             usage = getattr(response, 'usage', None)
@@ -315,8 +323,8 @@ class LLMRouter:
                         messages=messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
-                        request_timeout=120,
-                        **kwargs,
+                        request_timeout=60,
+                        **call_kwargs,
                     )
                     usage = getattr(response, 'usage', None)
                     if usage:
