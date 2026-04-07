@@ -274,7 +274,7 @@ class QueryEngine:
                         if event["type"] == "content":
                             chunk = event["content"]
                             full_response += chunk
-                            yield {"type": "chunk", "text": chunk}
+                            yield {"type": "chunk", "content": full_response, "chunk": chunk}
                             
                         elif event["type"] == "tool_calls":
                             has_tool_calls = True
@@ -292,7 +292,7 @@ class QueryEngine:
                                 tid = call["id"]
                                 fname = call["function"]["name"]
                                 fargs_str = call["function"]["arguments"]
-                                yield {"type": "status", "message": f"🔧 Executando {fname}..."}
+                                yield {"type": "status", "content": f"🔧 Executando {fname}...\n\n" + full_response}
                                 
                                 try:
                                     kwargs = json.loads(fargs_str) if fargs_str else {}
@@ -319,12 +319,12 @@ class QueryEngine:
             except Exception as e:
                 log.error("Erro no streaming com tools", error=str(e))
                 full_response += f"\n⚠️ Erro ao gerar resposta: {str(e)}"
-                yield {"type": "error", "message": full_response}
+                yield {"type": "error", "content": full_response, "message": str(e)}
                 status = "error"
         else:
             full_response = "⚠️ Nenhum provedor LLM configurado."
             status = "error"
-            yield {"type": "error", "message": full_response}
+            yield {"type": "error", "content": full_response}
 
         total_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
         
@@ -333,6 +333,7 @@ class QueryEngine:
 
         yield {
             "type": "final",
+            "content": full_response,
             "pipeline_result": PipelineResult(
                 success=(status != "error"),
                 response=full_response,
