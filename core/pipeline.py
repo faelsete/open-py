@@ -323,8 +323,9 @@ class ExecutionPipeline:
         try:
             response = await self.llm.complete(
                 messages=messages,
-                max_tokens=300,   # Resposta curta — é uma saudação
-                temperature=0.8,  # Mais natural/humano
+                max_tokens=300,
+                temperature=0.8,
+                thinking=False,  # Fast path: sem pensar, resposta direta
             )
             total_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
             log.info("⚡ Fast path completo", total_ms=total_ms,
@@ -636,8 +637,8 @@ class ExecutionPipeline:
         # Core responde diretamente via LLM
         if self.llm:
             messages = ctx.get("messages", [])
-            # v4.2: max_tokens limitado — evita respostas de 800+ tokens pra perguntas simples
-            response = await self.llm.complete(messages=messages, max_tokens=1024)
+            # v4.2: max_tokens 2048 + thinking ON para raciocínio profundo
+            response = await self.llm.complete(messages=messages, max_tokens=2048, thinking=True)
 
             # v4.1: Pós-execução — salvar aprendizado
             if thought_chain and self.neural:

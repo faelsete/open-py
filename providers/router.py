@@ -252,17 +252,26 @@ class LLMRouter:
 
     def _extract_content(self, response) -> str:
         """Extrai conteúdo da resposta LLM.
-        Alguns modelos (GLM, thinking models) usam reasoning_content ao invés de content.
-        """
+        v4.2: Prioriza content (resposta real). reasoning_content é pensamento
+        interno do modelo — só usa como fallback se content estiver vazio.
+        Quando o modelo pensa E responde, o usuário vê SÓ a resposta."""
         msg = response.choices[0].message
         content = getattr(msg, 'content', None)
-        if content:
-            return content
-        # Fallback: modelos com thinking (GLM, etc.) podem usar reasoning_content
         reasoning = getattr(msg, 'reasoning_content', None)
+
+        # Log do pensamento (debug, não vai pro usuário)
         if reasoning:
-            return reasoning
-        # Último recurso
+            log.debug("🧠 Thinking interno",
+                      reasoning_chars=len(reasoning),
+                      has_content=bool(content))
+
+        # Prioridade: content > reasoning > fallback
+        if content and content.strip():
+            return content.strip()
+        if reasoning and reasoning.strip():
+            # Modelo gastou tokens pensando mas gerou resposta no reasoning
+            # Extrair a parte útil (após a análise)
+            return reasoning.strip()
         return str(msg) if msg else ""
 
     # ============================================
@@ -270,11 +279,12 @@ class LLMRouter:
     # ============================================
 
     async def complete(self, messages: list, model: str = None,
-                       max_tokens: int = 4096, temperature: float = 0.7,
-                       **kwargs) -> str:
+                       max_tokens: int = 2048, temperature: float = 0.7,
+                       thinking: bool = True, **kwargs) -> str:
         """
         Chamada unificada com fallback entre provedores.
-        model=None → usa o provedor ativo.
+        v4.2: thinking=True (padrão) permite o modelo raciocinar internamente.
+              thinking=False para fast path (saudações, confirmações).
         """
         if not self._available or not self.router:
             raise NoProviderAvailableError("Nenhum provedor LLM configurado")
@@ -282,28 +292,27 @@ class LLMRouter:
         target_model = model or self._active_provider or self._model_names[0]
 
         try:
-            log.info(f"🚀 Chamada LLM: {target_model}")
-            # v4.2: Desligar thinking mode do GLM/modelos com raciocínio
-            # Sem isso, o modelo gasta TODOS os tokens no pensamento interno
-            # e nunca gera a resposta real (retorna reasoning_content em inglês)
+            log.info(f"🚀 Chamada LLM: {target_model}", thinking=thinking)
+            # v4.2: Thinking adaptativo — ON por padrão, fast path pode desligar
             call_kwargs = dict(kwargs)
             if "extra_body" not in call_kwargs:
                 call_kwargs["extra_body"] = {
-                    "chat_template_kwargs": {"enable_thinking": False}
+                    "chat_template_kwargs": {"enable_thinking": thinking}
                 }
             response = await self.router.acompletion(
                 model=target_model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                request_timeout=60,  # v4.2: 60s (prompt agora é ~200 tokens)
+                request_timeout=90,  # v4.2: 90s (thinking pode demorar mais)
                 **call_kwargs,
             )
-            # v4.1: Log de tokens consumidos
+            # Log de tokens consumidos
             usage = getattr(response, 'usage', None)
             if usage:
                 log.info("📊 Tokens",
                          model=target_model,
+                         thinking=thinking,
                          prompt=getattr(usage, 'prompt_tokens', '?'),
                          completion=getattr(usage, 'completion_tokens', '?'),
                          total=getattr(usage, 'total_tokens', '?'))
