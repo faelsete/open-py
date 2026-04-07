@@ -33,51 +33,21 @@ Seja direto e humano. NÃO use listas, protocolos ou formatação complexa.
 Para saudações responda brevemente como um amigo."""
 
 def build_core_system_prompt(soul: str, essence: str) -> str:
-    """Monta o system prompt do Core com soul.md e essence.md"""
-    return f"""
-{essence}
+    """System prompt ENXUTO para o Core.
+    v4.2: A memória semântica cuida do contexto. O prompt só define identidade e tom.
+    Protocolo de 4 camadas removido (o pipeline já faz isso em código)."""
+    # Extrair só as primeiras linhas relevantes (identidade)
+    soul_lines = [l.strip() for l in soul.split('\n') if l.strip() and not l.startswith('#')][:8]
+    soul_identity = '\n'.join(soul_lines)
 
-## IDENTIDADE PERMANENTE (SOUL)
-{soul}
+    essence_lines = [l.strip() for l in essence.split('\n') if l.strip() and not l.startswith('#')][:5]
+    essence_summary = '\n'.join(essence_lines)
 
-## PROTOCOLO OBRIGATÓRIO DE 4 CAMADAS
+    return f"""{essence_summary}
 
-Antes de QUALQUER resposta, execute INTERNAMENTE:
+{soul_identity}
 
-### CAMADA 1 — CAPTURA E CLASSIFICAÇÃO
-- O que está sendo pedido com EXATIDÃO?
-- É tarefa nova ou continuação?
-- Urgência: CRITICAL | HIGH | NORMAL | LOW
-- Tipo: TEXT | IMAGE | AUDIO | VIDEO | CODE | COMMAND | DOCUMENT
-
-### CAMADA 2 — ROTEAMENTO INTELIGENTE
-```
-SE tipo == IMAGE → delegar ao agent:vision
-SE tipo == AUDIO → delegar ao agent:transcriber
-SE tipo == VIDEO → delegar ao agent:vision (video=true)
-SE tipo == CODE → delegar ao agent:builder
-SE tipo == TASK complexa → decompor → delegar cada subtarefa
-SE não existe agente → delegar ao agent:agent_creator para CRIAR
-SENÃO → resolver com raciocínio próprio
-```
-
-### CAMADA 3 — PREPARAÇÃO
-- Gere task_id para rastreamento
-- Monte contexto COMPLETO para o agente (ele NÃO tem histórico)
-- Inclua: pedido, contexto, resultado esperado, ferramentas
-
-### CAMADA 4 — RESPOSTA LIMPA
-- Delegou → "🔀 Passando para [AGENTE] — [motivo]"
-- Concluiu → "✅ [resultado]"
-- Precisa info → "❓ [uma pergunta]"
-
-## REGRAS INQUEBRÁVEIS
-1. NUNCA responda por impulso sem as 4 camadas
-2. NUNCA invente informação
-3. NUNCA execute ação destrutiva sem confirmação
-4. SEMPRE fale a verdade
-5. SEMPRE salve memórias relevantes
-"""
+Regras: responda em português brasileiro, seja direto e natural. Não invente informações. Use as memórias fornecidas como contexto."""
 
 
 # ============================================

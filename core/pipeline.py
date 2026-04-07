@@ -431,54 +431,33 @@ class ExecutionPipeline:
     # ============================================
 
     async def _gate_memory_recall(self, ctx: dict, prev: dict) -> dict:
-        """Busca memórias relevantes ao input atual"""
+        """Busca memórias relevantes ao input atual.
+        v4.2: Simplificado — buffer RAM + 1 busca semântica (não 3 queries)."""
         if not self.memory:
             return {"memories": [], "source": "none"}
 
         query = ctx["raw_input"]
         memories = []
 
-        # 1. Buffer RAM (curto prazo — mais relevante)
-        buffer_results = self.memory.search_buffer(query, limit=3)
+        # 1. Buffer RAM (instantâneo — curto prazo)
+        buffer_results = self.memory.search_buffer(query, limit=2)
         for mem in buffer_results:
-            content = mem.get("content", "")
-            if len(content) > 300:
-                content = content[:300] + "..."
+            content = mem.get("content", "")[:150]
             memories.append({"content": content, "source": "buffer", "weight": 0.9})
 
-        # 2. PostgreSQL via busca semântica (longo prazo)
+        # 2. PostgreSQL semântico (longo prazo — 1 query apenas, limit reduzido)
         try:
-            db_results = await self.memory.search(query, mode="hybrid", limit=5)
+            db_results = await self.memory.search(query, mode="hybrid", limit=3)
             for mem in db_results:
-                content = mem.get("content", "")
-                if len(content) > 300:
-                    content = content[:300] + "..."
+                content = mem.get("content", "")[:150]
                 similarity = mem.get("similarity", 0.5)
                 memories.append({
                     "content": content,
                     "source": "postgresql",
                     "weight": float(similarity) if similarity else 0.5,
-                    "tags": mem.get("tags", []),
                 })
         except Exception as e:
-            log.warning("⚠️ Busca semântica falhou, usando buffer apenas", error=str(e))
-
-        # 3. Preferências do usuário (sempre úteis)
-        if ctx.get("user_id"):
-            try:
-                prefs = await self.memory.search(
-                    f"PREFERÊNCIA user:{ctx['user_id']}",
-                    mode="keyword", limit=3
-                )
-                for pref in prefs:
-                    content = pref.get("content", "")[:150]
-                    memories.append({
-                        "content": content,
-                        "source": "preferences",
-                        "weight": 0.85,
-                    })
-            except Exception:
-                pass
+            log.warning("⚠️ Busca semântica falhou", error=str(e))
 
         ctx["memories"] = memories
         return {"memories": memories, "count": len(memories)}
@@ -588,36 +567,18 @@ class ExecutionPipeline:
         # System prompt com soul + essence
         system_prompt = build_core_system_prompt(ctx.get("soul", ""), ctx.get("essence", ""))
 
-        # Injetar memórias no contexto
+        # Injetar memórias no contexto (v4.2: máx 3 memórias, conteúdo curto)
         if memories:
-            memory_block = "\n## Memórias relevantes (recuperação semântica)\n"
-            for mem in memories[:8]:
-                content = mem.get("content", "")
-                tags = mem.get("tags", [])
-                tag_str = f" [{', '.join(tags[:3])}]" if tags else ""
-                memory_block += f"- {content}{tag_str}\n"
-            system_prompt += f"\n{memory_block}"
-
-        # v4.1: Injetar plano neural no contexto
-        if thought_chain and thought_chain.steps:
-            plan_block = "\n## Plano de execução (gerado pelo raciocínio neural)\n"
-            plan_block += f"**Análise:** {thought_chain.task_analysis}\n"
-            plan_block += f"**Abordagem:** {thought_chain.chosen_approach}\n"
-            plan_block += f"**Confiança:** {thought_chain.confidence}\n"
-            if thought_chain.requires_sandbox:
-                plan_block += "**⚠️ Usar ambiente sandbox isolado**\n"
-            plan_block += "\n**Steps:**\n"
-            for step in thought_chain.steps:
-                tool_info = f" [tool: {step.tool}]" if step.tool else ""
-                agent_info = f" [agente: {step.agent}]" if step.agent else ""
-                plan_block += f"{step.step_number}. {step.action}{tool_info}{agent_info}\n"
-            plan_block += "\nSIGA ESTE PLANO. Execute cada step na ordem. Use as ferramentas indicadas.\n"
-            system_prompt += f"\n{plan_block}"
+            memory_block = "\nContexto relevante:\n"
+            for mem in memories[:3]:  # v4.2: 3 ao invés de 8
+                content = mem.get("content", "")[:150]  # v4.2: 150 chars max
+                memory_block += f"- {content}\n"
+            system_prompt += memory_block
 
         ctx["system_prompt"] = system_prompt
 
-        # Montar mensagens completas
-        history = ctx.get("history", [])
+        # Montar mensagens completas (v4.2: últimas 6 mensagens apenas)
+        history = ctx.get("history", [])[-6:]
         messages = [
             {"role": "system", "content": system_prompt},
             *history,
