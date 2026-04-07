@@ -52,7 +52,13 @@ class QueryEngine:
             return
 
         system_prompt = build_fast_system_prompt(soul)
-        recent_history = conversation_history[-5:] if conversation_history else []
+        recent_history = []
+        for h in (conversation_history[-5:] if conversation_history else []):
+            content = h.get("content", "")
+            if len(content) > 1000:
+                content = content[:1000] + "\n...[Truncated: See DB / Context for full]"
+            recent_history.append({"role": h.get("role", "user"), "content": content})
+
         messages = [
             {"role": "system", "content": system_prompt},
             *recent_history,
@@ -196,7 +202,15 @@ class QueryEngine:
         from core.brain import build_core_system_prompt
         system_prompt = build_core_system_prompt(soul, essence, memories)
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(ctx["history"][-8:])
+        
+        recent_history = []
+        for h in ctx["history"][-8:]:
+            content = h.get("content", "")
+            if len(content) > 1500:
+                content = content[:1500] + "\n...[Truncated: Lazy load by Semantics if needed]"
+            recent_history.append({"role": h.get("role", "user"), "content": content})
+        messages.extend(recent_history)
+        
         messages.append({"role": "user", "content": raw_input})
 
         # GATE: EXECUTE

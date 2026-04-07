@@ -295,9 +295,9 @@ class LLMRouter:
             log.info(f"🚀 Chamada LLM: {target_model}", thinking=thinking)
             # v4.2: Thinking adaptativo — ON por padrão, fast path pode desligar
             call_kwargs = dict(kwargs)
-            if "extra_body" not in call_kwargs:
+            if thinking and "extra_body" not in call_kwargs:
                 call_kwargs["extra_body"] = {
-                    "chat_template_kwargs": {"enable_thinking": thinking}
+                    "chat_template_kwargs": {"enable_thinking": True}
                 }
             response = await self.router.acompletion(
                 model=target_model,
@@ -448,9 +448,9 @@ class LLMRouter:
         target_model = model or self._active_provider or self._model_names[0]
 
         call_kwargs = dict(kwargs)
-        if "extra_body" not in call_kwargs:
+        if thinking and "extra_body" not in call_kwargs:
             call_kwargs["extra_body"] = {
-                "chat_template_kwargs": {"enable_thinking": thinking}
+                "chat_template_kwargs": {"enable_thinking": True}
             }
 
         try:
