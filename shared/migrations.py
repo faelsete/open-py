@@ -131,25 +131,28 @@ CREATE INDEX IF NOT EXISTS idx_agent_logs_agent ON agent_logs(agent_id, created_
 VECTOR_DIMENSION_MIGRATION = """
 DO $$
 BEGIN
-    -- Alterar memories.embedding se existir com dimensão diferente
+    -- 1. Limpar embeddings ANTES de alterar tipo (pgvector não converte entre dims)
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'memories' AND column_name = 'embedding'
     ) THEN
+        -- Nullar todos os embeddings (serão regenerados pelo Ollama)
+        UPDATE memories SET embedding = NULL WHERE embedding IS NOT NULL;
+        -- Dropar index HNSW (depende da dimensão antiga)
+        DROP INDEX IF EXISTS idx_memories_embedding;
+        -- Alterar dimensão
         EXECUTE format('ALTER TABLE memories ALTER COLUMN embedding TYPE vector(%s)', {dim});
+        -- Recriar index com nova dimensão
+        CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories USING hnsw(embedding vector_cosine_ops);
     END IF;
 
-    -- Alterar daily_compilations.summary_embedding se existir
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'daily_compilations' AND column_name = 'summary_embedding'
     ) THEN
+        UPDATE daily_compilations SET summary_embedding = NULL WHERE summary_embedding IS NOT NULL;
         EXECUTE format('ALTER TABLE daily_compilations ALTER COLUMN summary_embedding TYPE vector(%s)', {dim});
     END IF;
-
-    -- Limpar embeddings antigos com dimensão incompatível
-    UPDATE memories SET embedding = NULL WHERE embedding IS NOT NULL AND array_length(embedding::real[], 1) != {dim};
-    UPDATE daily_compilations SET summary_embedding = NULL WHERE summary_embedding IS NOT NULL AND array_length(summary_embedding::real[], 1) != {dim};
 END $$;
 """
 

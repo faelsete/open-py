@@ -94,7 +94,7 @@ class PipelineConfig(BaseModel):
     # Gates individuais (todos ON por padrão)
     gate_memory_recall: bool = True
     gate_validate: bool = True
-    gate_think: bool = True        # v4.1: Raciocínio neural
+    gate_think: bool = False       # v4.1: OFF — evita chamada LLM duplicada (think+execute em paralelo sobrecarrega API)
     # Circuit breaker
     max_gate_failures: int = 3
     gate_cooldown_minutes: int = 5
@@ -104,7 +104,7 @@ class PipelineConfig(BaseModel):
     gate_timeout_route: int = 5
     gate_timeout_think: int = 60     # v4.1: Aumentado (reasoning completo precisa de tempo)
     gate_timeout_prepare: int = 5
-    gate_timeout_execute: int = 300
+    gate_timeout_execute: int = 180  # v4.1: 3min (com think OFF, 1 chamada LLM basta)
     gate_timeout_validate: int = 30  # v4.1: Aumentado (validação também chama LLM)
 
 
