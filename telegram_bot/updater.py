@@ -60,6 +60,14 @@ class MessageUpdater:
             err = str(e).lower()
             if "message is not modified" in err:
                 pass
+            elif "parse entities" in err or "unsupported start tag" in err:
+                try:
+                    if not self._reply_msg:
+                        self._reply_msg = await self.message.reply(text_to_send or "...", parse_mode=None)
+                    else:
+                        await self._reply_msg.edit_text(text_to_send, parse_mode=None)
+                except Exception as e2:
+                    log.warning("Falha severa ao atualizar mensagem (fallback)", error=str(e2))
             else:
                 log.warning("Falha ao atualizar mensagem no Telegram", error=str(e))
 
@@ -81,5 +89,14 @@ class MessageUpdater:
         except Exception as e:
             err = str(e).lower()
             if "message is not modified" not in err:
-                log.error("Erro no finalize do MessageUpdater", error=str(e))
+                if "parse entities" in err or "unsupported start tag" in err:
+                    try:
+                        if not self._reply_msg:
+                            self._reply_msg = await self.message.reply(self._current_text, parse_mode=None)
+                        else:
+                            await self._reply_msg.edit_text(self._current_text, parse_mode=None)
+                    except Exception as e2:
+                        log.error("Erro duplo no finalize do MessageUpdater (fallback)", error=str(e2))
+                else:
+                    log.error("Erro no finalize do MessageUpdater", error=str(e))
 
