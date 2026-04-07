@@ -11,6 +11,7 @@ Circuit breaker impede loops infinitos em gates com falha crônica.
 """
 
 import asyncio
+import re
 import time
 from typing import Optional
 
@@ -90,17 +91,31 @@ class ExecutionPipeline:
                   conversation_history: list[dict] = None,
                   soul: str = "", essence: str = "") -> PipelineResult:
         """
-        Executa todos os 6 gates sequencialmente.
-        Falha em gate obrigatório = abort com erro claro.
-        Gate com circuit breaker tripped = skip com warning.
+        Executa todos os 7 gates sequencialmente.
+        v4.2: FAST PATH para mensagens simples (saudações, perguntas curtas).
         """
         self._total_runs += 1
         pipeline_start = time.perf_counter()
         gate_results: dict[str, GateResult] = {}
+        attachments = attachments or []
+
+        # ============================================
+        # v4.2: FAST PATH — Mensagens simples pulam pipeline pesado
+        # Padrão Claude Code: resposta rápida sem gates desnecessários
+        # ============================================
+        if self._is_simple_message(raw_input, attachments):
+            log.info("⚡ Fast path ativado", input=raw_input[:30])
+            return await self._fast_execute(
+                raw_input=raw_input,
+                soul=soul,
+                conversation_history=conversation_history or [],
+                pipeline_start=pipeline_start,
+            )
+
         context = {
             "raw_input": raw_input,
             "input_type": input_type,
-            "attachments": attachments or [],
+            "attachments": attachments,
             "user_id": user_id,
             "history": conversation_history or [],
             "soul": soul,
@@ -244,6 +259,90 @@ class ExecutionPipeline:
             task_id=task_id,
             delegated_to=delegated_to,
         )
+
+    # ============================================
+    # v4.2: FAST PATH — Resposta rápida para mensagens simples
+    # ============================================
+
+    # Padrões que indicam mensagem simples (não precisa pipeline completo)
+    _SIMPLE_PATTERNS = re.compile(
+        r'^(oi|olá|ola|hey|hi|hello|e ai|eai|eae|boa noite|bom dia|boa tarde|'
+        r'tudo bem|tudo certo|beleza|blz|suave|como vai|ta ai|tá aí|'
+        r'obrigado|obrigada|vlw|valeu|brigado|tmj|show|top|massa|dale|'
+        r'sim|não|nao|ok|td bem|ta por ai|tá por aí|oe|salve|fala|'
+        r'kd vc|cadê|kkk|haha|rs|lol|😂|👍|❤️|🙏|ta vivo|tá vivo|'
+        r'to aqui|tô aqui|bora|vamo|vamos|yes|no|yep|nope|tranquilo|'
+        r'partiu|tchau|bye|flw|falou|até|ate|xau|fui)\b',
+        re.IGNORECASE
+    )
+
+    def _is_simple_message(self, raw_input: str, attachments: list) -> bool:
+        """Detecta mensagens simples que não precisam do pipeline completo.
+        Critérios: curta, sem mídia, sem comando, sem intenção complexa."""
+        # Com anexo = nunca é simples
+        if attachments:
+            return False
+        # Comando / = nunca é simples
+        if raw_input.strip().startswith('/'):
+            return False
+        # Muito longa = complexa
+        if len(raw_input.strip()) > 60:
+            return False
+        # Padrão de saudação/confirmação
+        if self._SIMPLE_PATTERNS.match(raw_input.strip()):
+            return True
+        # Mensagem muito curta sem padrão especial (< 15 chars)
+        if len(raw_input.strip()) <= 15:
+            from core.brain import CODE_PATTERNS, TASK_INTENT_PATTERN
+            if not CODE_PATTERNS.search(raw_input) and not TASK_INTENT_PATTERN.search(raw_input):
+                return True
+        return False
+
+    async def _fast_execute(self, raw_input: str, soul: str,
+                            conversation_history: list,
+                            pipeline_start: float) -> PipelineResult:
+        """Execução rápida: 1 chamada LLM com prompt mínimo e max_tokens baixo.
+        Sem memory_recall, sem think, sem validate."""
+        from core.brain import build_fast_system_prompt
+
+        if not self.llm:
+            return PipelineResult(
+                success=False, error="Nenhum provedor LLM configurado.",
+                total_duration_ms=0
+            )
+
+        system_prompt = build_fast_system_prompt(soul)
+        # Usar só as últimas 5 mensagens do histórico (não sobrecarregar)
+        recent_history = conversation_history[-5:] if conversation_history else []
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *recent_history,
+            {"role": "user", "content": raw_input},
+        ]
+
+        try:
+            response = await self.llm.complete(
+                messages=messages,
+                max_tokens=300,   # Resposta curta — é uma saudação
+                temperature=0.8,  # Mais natural/humano
+            )
+            total_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
+            log.info("⚡ Fast path completo", total_ms=total_ms,
+                     prompt_chars=len(system_prompt))
+            return PipelineResult(
+                success=True,
+                response=response,
+                gates={},
+                total_duration_ms=total_ms,
+            )
+        except Exception as e:
+            log.warning("⚠️ Fast path falhou, usando pipeline completo", error=str(e))
+            # Fallback: pipeline normal (não retorna erro, tenta de novo)
+            return PipelineResult(
+                success=False,
+                error=f"Fast path falhou: {str(e)}",
+                total_duration_ms=round((time.perf_counter() - pipeline_start) * 1000, 2)
+            )
 
     # ============================================
     # GATE 1: CAPTURE — Classificação rápida

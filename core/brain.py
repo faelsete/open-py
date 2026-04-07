@@ -19,6 +19,19 @@ log = get_logger("brain")
 # SYSTEM PROMPTS
 # ============================================
 
+
+def build_fast_system_prompt(soul: str) -> str:
+    """System prompt MÍNIMO para respostas rápidas (saudações, perguntas simples).
+    Usa apenas as 3 primeiras linhas do soul.md (identidade) sem protocolo pesado."""
+    # Pegar só a identidade do soul (primeiras linhas não-vazias)
+    soul_lines = [l.strip() for l in soul.split('\n') if l.strip()][:5]
+    soul_identity = '\n'.join(soul_lines)
+    return f"""{soul_identity}
+
+Responda de forma natural, concisa e calorosa em português brasileiro.
+Seja direto e humano. NÃO use listas, protocolos ou formatação complexa.
+Para saudações responda brevemente como um amigo."""
+
 def build_core_system_prompt(soul: str, essence: str) -> str:
     """Monta o system prompt do Core com soul.md e essence.md"""
     return f"""
