@@ -234,7 +234,7 @@ class Doctor:
             try:
                 config = load_config()
                 from shared.migrations import run_migrations
-                await run_migrations(config.database.dsn)
+                await run_migrations(config.database.dsn, embedding_dim=config.memory.embedding_dimensions)
                 fixed += 1
                 log.info("🔧 Tabelas do banco recriadas")
             except Exception:

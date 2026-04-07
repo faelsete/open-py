@@ -269,9 +269,17 @@ class LLMRouter:
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                request_timeout=60,  # Timeout de 60s
+                request_timeout=180,  # v4.1: Gemma-4 31B precisa de tempo
                 **kwargs,
             )
+            # v4.1: Log de tokens consumidos
+            usage = getattr(response, 'usage', None)
+            if usage:
+                log.info("📊 Tokens",
+                         model=target_model,
+                         prompt=getattr(usage, 'prompt_tokens', '?'),
+                         completion=getattr(usage, 'completion_tokens', '?'),
+                         total=getattr(usage, 'total_tokens', '?'))
             return response.choices[0].message.content
 
         except Exception as e:
@@ -288,9 +296,16 @@ class LLMRouter:
                         messages=messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
-                        request_timeout=60,  # Timeout no fallback também
+                        request_timeout=180,  # v4.1: Timeout no fallback também
                         **kwargs,
                     )
+                    usage = getattr(response, 'usage', None)
+                    if usage:
+                        log.info("📊 Tokens (fallback)",
+                                 model=fallback,
+                                 prompt=getattr(usage, 'prompt_tokens', '?'),
+                                 completion=getattr(usage, 'completion_tokens', '?'),
+                                 total=getattr(usage, 'total_tokens', '?'))
                     return response.choices[0].message.content
                 except Exception as ef:
                     log.error(f"❌ Falha no fallback {fallback}: {str(ef)}")

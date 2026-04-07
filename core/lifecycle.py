@@ -636,7 +636,9 @@ class OpenPY:
         dsn = self.config.database.dsn
         try:
             self.db_pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
-            await run_migrations(dsn)
+            # v4.1: Usar dimensão do Ollama se ativo, senão da config de memória
+            embed_dim = self.config.ollama.embedding_dimensions if self.config.ollama.should_enable() else self.config.memory.embedding_dimensions
+            await run_migrations(dsn, embedding_dim=embed_dim)
             log.info("✅ PostgreSQL conectado e migrations executadas")
         except Exception as e:
             log.error("❌ Erro ao conectar PostgreSQL", error=str(e))

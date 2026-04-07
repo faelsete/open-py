@@ -8,7 +8,7 @@ from shared.logger import get_logger
 
 log = get_logger("migrations")
 
-SCHEMA_SQL = """
+SCHEMA_SQL_TEMPLATE = """
 -- ============================================
 -- EXTENSÕES
 -- ============================================
@@ -25,9 +25,9 @@ CREATE TABLE IF NOT EXISTS memories (
     content         TEXT NOT NULL,
     content_type    VARCHAR(20) NOT NULL DEFAULT 'fact',
     source          VARCHAR(50) NOT NULL DEFAULT 'core',
-    tags            TEXT[] NOT NULL DEFAULT '{}',
-    embedding       vector(384),
-    metadata        JSONB DEFAULT '{}',
+    tags            TEXT[] NOT NULL DEFAULT '{{}}',
+    embedding       vector({dim}),
+    metadata        JSONB DEFAULT '{{}}',
     importance      SMALLINT DEFAULT 5 CHECK (importance BETWEEN 1 AND 10),
     access_count    INTEGER DEFAULT 0,
     last_accessed   TIMESTAMPTZ
@@ -41,10 +41,10 @@ CREATE TABLE IF NOT EXISTS daily_compilations (
     date            DATE NOT NULL UNIQUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     summary         TEXT NOT NULL,
-    summary_embedding vector(384),
-    memory_ids      BIGINT[] NOT NULL DEFAULT '{}',
+    summary_embedding vector({dim}),
+    memory_ids      BIGINT[] NOT NULL DEFAULT '{{}}',
     memory_count    INTEGER NOT NULL DEFAULT 0,
-    tags            TEXT[] NOT NULL DEFAULT '{}',
+    tags            TEXT[] NOT NULL DEFAULT '{{}}',
     highlights      JSONB DEFAULT '[]',
     decisions       JSONB DEFAULT '[]',
     open_tasks      JSONB DEFAULT '[]'
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     result          TEXT,
     error           TEXT,
     priority        SMALLINT DEFAULT 5,
-    tags            TEXT[] DEFAULT '{}'
+    tags            TEXT[] DEFAULT '{{}}'
 );
 
 -- ============================================
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS agent_logs (
     task_id         VARCHAR(20),
     level           VARCHAR(10) NOT NULL DEFAULT 'info',
     message         TEXT NOT NULL,
-    metadata        JSONB DEFAULT '{}'
+    metadata        JSONB DEFAULT '{{}}'
 );
 
 -- ============================================
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS agent_configs (
     agent_id        VARCHAR(50) PRIMARY KEY,
     name            VARCHAR(100) NOT NULL,
     agent_type      VARCHAR(20) NOT NULL DEFAULT 'temporary',
-    config          JSONB NOT NULL DEFAULT '{}',
+    config          JSONB NOT NULL DEFAULT '{{}}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_active     TIMESTAMPTZ,
     status          VARCHAR(20) DEFAULT 'stopped'
@@ -127,14 +127,51 @@ CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_logs_agent ON agent_logs(agent_id, created_at DESC);
 """
 
+# v4.1: Migração para alterar dimensões de vector em DBs existentes
+VECTOR_DIMENSION_MIGRATION = """
+DO $$
+BEGIN
+    -- Alterar memories.embedding se existir com dimensão diferente
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'memories' AND column_name = 'embedding'
+    ) THEN
+        EXECUTE format('ALTER TABLE memories ALTER COLUMN embedding TYPE vector(%s)', {dim});
+    END IF;
 
-async def run_migrations(dsn: str):
+    -- Alterar daily_compilations.summary_embedding se existir
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'daily_compilations' AND column_name = 'summary_embedding'
+    ) THEN
+        EXECUTE format('ALTER TABLE daily_compilations ALTER COLUMN summary_embedding TYPE vector(%s)', {dim});
+    END IF;
+
+    -- Limpar embeddings antigos com dimensão incompatível
+    UPDATE memories SET embedding = NULL WHERE embedding IS NOT NULL AND array_length(embedding::real[], 1) != {dim};
+    UPDATE daily_compilations SET summary_embedding = NULL WHERE summary_embedding IS NOT NULL AND array_length(summary_embedding::real[], 1) != {dim};
+END $$;
+"""
+
+
+async def run_migrations(dsn: str, embedding_dim: int = 1024):
     """Executa as migrations no banco de dados"""
-    log.info("Executando migrations...")
+    log.info("Executando migrations...", embedding_dim=embedding_dim)
 
     conn = await asyncpg.connect(dsn)
     try:
-        await conn.execute(SCHEMA_SQL)
+        # Criar tabelas
+        schema = SCHEMA_SQL_TEMPLATE.format(dim=embedding_dim)
+        await conn.execute(schema)
+
+        # Migrar dimensões de vetores existentes
+        try:
+            dim_migration = VECTOR_DIMENSION_MIGRATION.format(dim=embedding_dim)
+            await conn.execute(dim_migration)
+            log.info("✅ Dimensões de vetores atualizadas", dim=embedding_dim)
+        except Exception as e:
+            log.warning("⚠️ Migração de dimensões falhou (pode ser OK na 1ª vez)", error=str(e))
+
         log.info("✅ Migrations executadas com sucesso")
     except Exception as e:
         log.error("❌ Erro nas migrations", error=str(e))

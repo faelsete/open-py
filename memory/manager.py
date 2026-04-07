@@ -53,7 +53,7 @@ MEMORY_SCHEMA = {
     "db_table": {
         "table": "memories",
         "columns": "id SERIAL, content TEXT, source TEXT, tags TEXT[], "
-                   "embedding VECTOR(384), importance INT, created_at TIMESTAMP",
+                   "embedding VECTOR, importance INT, created_at TIMESTAMP",
     },
 }
 

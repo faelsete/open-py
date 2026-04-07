@@ -821,7 +821,7 @@ import asyncio, sys
 sys.path.insert(0, '$INSTALL_DIR')
 try:
     from shared.migrations import run_migrations
-    asyncio.run(run_migrations('postgresql://openpy:$DB_PASSWORD@localhost:5432/openpy'))
+    asyncio.run(run_migrations('postgresql://openpy:$DB_PASSWORD@localhost:5432/openpy', embedding_dim=$EMBEDDING_DIM))
     print('OK')
 except Exception as e:
     print(f'WARN: {e}', file=sys.stderr)
