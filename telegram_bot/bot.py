@@ -18,7 +18,7 @@ from aiogram.types import BotCommand
 
 from core.lifecycle import OpenPY
 from core.message_queue import MessageBatcher, TaskQueue, QueuedTask, Priority
-from shared.config_manager import CoreConfig, TelegramConfig
+from shared.config import CoreConfig, TelegramConfig
 from shared.logger import setup_logger, get_logger
 from .learner import FastLearner
 from .updater import MessageUpdater
