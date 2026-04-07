@@ -540,13 +540,14 @@ class LLMRouter:
                         for tc in delta.tool_calls:
                             idx = tc.index
                             if idx not in tool_calls_buffer:
-                                tool_calls_buffer[idx] = {
-                                    "id": tc.id or "",
-                                    "function": {
-                                        "name": tc.function.name if tc.function and tc.function.name else "",
-                                        "arguments": tc.function.arguments if tc.function and tc.function.arguments else ""
+                                    tool_calls_buffer[idx] = {
+                                        "id": tc.id or "",
+                                        "type": "function",
+                                        "function": {
+                                            "name": tc.function.name if tc.function and tc.function.name else "",
+                                            "arguments": tc.function.arguments if tc.function and tc.function.arguments else ""
+                                        }
                                     }
-                                }
                             else:
                                 if tc.id:
                                     tool_calls_buffer[idx]["id"] += tc.id
