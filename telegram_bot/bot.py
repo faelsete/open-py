@@ -5,6 +5,9 @@ Frontend principal do sistema via Telegram.
 
 import asyncio
 import os
+import uuid
+import platform
+import psutil
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types, F
@@ -13,11 +16,13 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import BotCommand
 
-from shared.config import TelegramConfig
-from shared.logger import get_logger
-from core.rate_limiter import RateLimiter
-from core.audit_log import AuditLog
+from core.lifecycle import OpenPY
 from core.message_queue import MessageBatcher, TaskQueue, QueuedTask, Priority
+from shared.config_manager import CoreConfig, TelegramConfig
+from shared.logger import setup_logger, get_logger
+from .learner import FastLearner
+from .updater import MessageUpdater
+from core.audit_log import AuditLog
 from core.auto_learner import AutoLearner
 
 log = get_logger("telegram")
@@ -546,14 +551,17 @@ class TelegramBot:
             await message.chat.do("typing")
             photo = message.photo[-1]
             file_path = await self._download_file(photo.file_id, "photo")
-            caption = message.caption or "Analise esta imagem"
-            result = await self.core.process(
-                input_text=caption,
-                input_type="image",
-                attachments=[file_path] if file_path else [],
-                user_id=message.from_user.id,
+            
+            self._pending_replies[message.chat.id] = message
+            await self.batcher.add_message(
+                chat_id=message.chat.id,
+                message={
+                    "text": message.caption or "Analise esta imagem",
+                    "input_type": "image",
+                    "user_id": message.from_user.id,
+                    "attachments": [file_path] if file_path else [],
+                }
             )
-            await self._send_long_message(message, result.get("response", ""))
 
         # === ÁUDIO / VOZ ===
         @self.dp.message(F.audio | F.voice)
@@ -563,13 +571,17 @@ class TelegramBot:
             await message.chat.do("typing")
             file_id = (message.audio or message.voice).file_id
             file_path = await self._download_file(file_id, "audio")
-            result = await self.core.process(
-                input_text=message.caption or "Transcreva este áudio",
-                input_type="audio",
-                attachments=[file_path] if file_path else [],
-                user_id=message.from_user.id,
+            
+            self._pending_replies[message.chat.id] = message
+            await self.batcher.add_message(
+                chat_id=message.chat.id,
+                message={
+                    "text": message.caption or "Transcreva este áudio",
+                    "input_type": "audio",
+                    "user_id": message.from_user.id,
+                    "attachments": [file_path] if file_path else [],
+                }
             )
-            await self._send_long_message(message, result.get("response", ""))
 
         # === DOCUMENTOS ===
         @self.dp.message(F.document)
@@ -578,13 +590,17 @@ class TelegramBot:
                 return
             await message.chat.do("typing")
             file_path = await self._download_file(message.document.file_id, "document")
-            result = await self.core.process(
-                input_text=message.caption or "Analise este documento",
-                input_type="document",
-                attachments=[file_path] if file_path else [],
-                user_id=message.from_user.id,
+            
+            self._pending_replies[message.chat.id] = message
+            await self.batcher.add_message(
+                chat_id=message.chat.id,
+                message={
+                    "text": message.caption or "Analise este documento",
+                    "input_type": "document",
+                    "user_id": message.from_user.id,
+                    "attachments": [file_path] if file_path else [],
+                }
             )
-            await self._send_long_message(message, result.get("response", ""))
 
         # === VÍDEO ===
         @self.dp.message(F.video | F.video_note)
@@ -594,13 +610,17 @@ class TelegramBot:
             await message.chat.do("typing")
             vid = message.video or message.video_note
             file_path = await self._download_file(vid.file_id, "video")
-            result = await self.core.process(
-                input_text=message.caption or "Analise este vídeo",
-                input_type="video",
-                attachments=[file_path] if file_path else [],
-                user_id=message.from_user.id,
+            
+            self._pending_replies[message.chat.id] = message
+            await self.batcher.add_message(
+                chat_id=message.chat.id,
+                message={
+                    "text": message.caption or "Analise este vídeo",
+                    "input_type": "video",
+                    "user_id": message.from_user.id,
+                    "attachments": [file_path] if file_path else [],
+                }
             )
-            await self._send_long_message(message, result.get("response", ""))
 
     # ============================================
     # BATCH PROCESSOR (chamado pelo MessageBatcher)
@@ -617,22 +637,25 @@ class TelegramBot:
         input_text = msg_data.get("text", "")
         user_id = msg_data.get("user_id", 0)
 
-        # Definir callback para processar o resultado
-        async def on_complete(result: dict):
-            response = result.get("response", "⚠️ Sem resposta do core.")
-            await self._send_long_message(message, response)
-            
-            # Learner (background)
-            asyncio.create_task(self.learner.learn_from_interaction(
-                user_input=input_text,
-                bot_response=response,
-                user_id=user_id,
-                input_type=msg_data.get("input_type", "text")
-            ))
+        updater = MessageUpdater(message)
 
-        # Criar tarefa para a fila
-        import uuid
-        
+        # Definir callback de evento (ao invés de on_complete)
+        async def on_event(event: dict):
+            content = event.get("content", "")
+            if event["type"] in ("chunk", "status"):
+                await updater.update(content)
+            elif event["type"] == "final":
+                await updater.update(content)
+                await updater.finalize()
+                
+                # Learner (background)
+                asyncio.create_task(self.learner.learn_from_interaction(
+                    user_input=input_text,
+                    bot_response=content,
+                    user_id=user_id,
+                    input_type=msg_data.get("input_type", "text")
+                ))
+
         task = QueuedTask(
             task_id=f"msg-{uuid.uuid4().hex[:8]}",
             priority=Priority.NORMAL,
@@ -640,7 +663,7 @@ class TelegramBot:
             input_type=msg_data.get("input_type", "text"),
             attachments=msg_data.get("attachments", []),
             user_id=user_id,
-            callback=on_complete
+            on_event=on_event
         )
 
         # Typing sustentado
@@ -665,15 +688,29 @@ class TelegramBot:
     async def _core_processor(self, task: QueuedTask) -> dict:
         """Chamado pela TaskQueue para processar a tarefa no Core"""
         try:
-            return await self.core.process(
+            final_result = None
+            async for event in self.core.process(
                 input_text=task.input_text,
                 input_type=task.input_type,
                 user_id=task.user_id,
                 attachments=task.attachments,
-            )
+            ):
+                if task.on_event:
+                    await task.on_event(event)
+                
+                if event["type"] == "final":
+                    final_result = {"response": event.get("content", ""), "status": "success"}
+                    
+            if not final_result:
+                final_result = {"response": "⚠️ Pipeline finalizado sem mensagem.", "status": "error"}
+            return final_result
+            
         except Exception as e:
+            err_msg = f"❌ Erro interno: {str(e)}"
             log.error("Erro no Core Processor", error=str(e))
-            return {"response": f"❌ Erro interno: {str(e)}", "status": "error"}
+            if task.on_event:
+                await task.on_event({"type": "final", "content": err_msg})
+            return {"response": err_msg, "status": "error"}
 
     # ============================================
     # AUTH

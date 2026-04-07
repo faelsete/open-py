@@ -112,7 +112,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 -- ÍNDICES DE PERFORMANCE
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_memories_tags ON memories USING GIN(tags);
-CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories USING hnsw(embedding vector_cosine_ops);
+DROP INDEX IF EXISTS idx_memories_embedding;
+CREATE INDEX idx_memories_embedding ON memories USING hnsw(embedding vector_cosine_ops) WITH (m = 32, ef_construction = 128);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_content_trgm ON memories USING gin(content gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(content_type);
@@ -143,7 +144,7 @@ BEGIN
         -- Alterar dimensão
         EXECUTE format('ALTER TABLE memories ALTER COLUMN embedding TYPE vector(%s)', {dim});
         -- Recriar index com nova dimensão
-        CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories USING hnsw(embedding vector_cosine_ops);
+        CREATE INDEX idx_memories_embedding ON memories USING hnsw(embedding vector_cosine_ops) WITH (m = 32, ef_construction = 128);
     END IF;
 
     IF EXISTS (

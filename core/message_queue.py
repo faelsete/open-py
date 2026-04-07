@@ -55,6 +55,7 @@ class QueuedTask:
     user_id: int = 0
     created_at: datetime = field(default_factory=datetime.now)
     callback: Optional[Callable] = None  # Para enviar resposta de volta
+    on_event: Optional[Callable] = None  # Para streaming de eventos (v4.1)
 
     def __lt__(self, other):
         """Ordenação por prioridade (menor = mais urgente)"""

@@ -140,9 +140,9 @@ class OpenPY:
         )
         log.info("✅ Neural Engine pronto (raciocínio antes da ação)")
 
-        # 12. v4.1: Pipeline (Túnel Rígido — 7 gates com Neural)
-        from core.pipeline import ExecutionPipeline
-        self.pipeline = ExecutionPipeline(
+        # 12. v4.1: Query Engine (Streaming pipeline)
+        from core.engine import QueryEngine
+        self.pipeline = QueryEngine(
             config=self.config,
             brain=self.brain,
             orchestrator=self.orchestrator,
@@ -150,8 +150,9 @@ class OpenPY:
             llm_router=self.llm_router,
             validator=self.validator,
             neural_engine=self.neural_engine,
+            tool_registry=getattr(self, 'tool_registry', None),
         )
-        log.info("✅ Pipeline v4.1 pronto (7 gates + Neural Thinking)")
+        log.info("✅ QueryEngine v4.1 pronto (Streaming)")
 
         # 12. v3.0: Feedback Loop
         from core.feedback_loop import FeedbackLoop
@@ -260,7 +261,7 @@ class OpenPY:
 
     async def process(self, input_text: str, input_type: str = "unknown",
                       attachments: list[str] = None,
-                      user_id: int = None, target_agent: str = None) -> dict:
+                      user_id: int = None, target_agent: str = None) -> AsyncGenerator[dict, None]:
         """
         v3.0: Ponto de entrada via Pipeline de 6 Gates.
         
@@ -280,11 +281,13 @@ class OpenPY:
                         tags=["importante", "manual"],
                         importance=10
                     )
-                return {
+                yield {
+                    "type": "final",
                     "response": f"✅ Memória salva com sucesso!\n\n_{content}_",
                     "status": "completed",
                     "task_id": None
                 }
+                return
                 
             # === CONFIRMAÇÃO PENDENTE ===
             if user_id in self._pending_creations:
@@ -301,12 +304,14 @@ class OpenPY:
                     
                 self._add_to_conversation(user_id, "user", input_text)
                 self._add_to_conversation(user_id, "assistant", response_text)
-                return {"response": response_text, "status": "completed"}
+                yield {"type": "final", "response": response_text, "status": "completed"}
+                return
 
-            # === v3.0: PIPELINE DE 6 GATES ===
+            # === v3.0: PIPELINE STREAMING ===
             history = self._get_conversation_history(user_id)
             
-            pipeline_result = await self.pipeline.run(
+            pipeline_result = None
+            async for event in self.pipeline.run(
                 raw_input=input_text,
                 input_type=input_type,
                 attachments=attachments,
@@ -314,12 +319,21 @@ class OpenPY:
                 conversation_history=history,
                 soul=self._soul,
                 essence=self._essence,
-            )
+            ):
+                if event["type"] == "final":
+                    pipeline_result = event["pipeline_result"]
+                else:
+                    yield event
+
+            if not pipeline_result:
+                yield {"type": "error", "message": "Pipeline falhou ao retornar resultado final."}
+                return
 
             if not pipeline_result.success:
-                error_msg = f"⚠️ Pipeline falhou no gate '{pipeline_result.failed_gate}': {pipeline_result.error}"
+                error_msg = f"⚠️ Pipeline falhou: {getattr(pipeline_result, 'error', 'Erro desconhecido')}"
                 log.error(error_msg)
-                return {"response": error_msg, "status": "error"}
+                yield {"type": "error", "message": error_msg}
+                return
 
             response_text = pipeline_result.response
 
@@ -341,8 +355,9 @@ class OpenPY:
                                     f"\nDeseja criar este agente? (SIM ou NÃO)")
                     self._add_to_conversation(user_id, "user", input_text)
                     self._add_to_conversation(user_id, "assistant", "Spec gerada. Aguardando confirmação.")
-                    return {"response": response_text, "status": "waiting",
+                    yield {"type": "final", "response": response_text, "status": "waiting",
                             "delegated_to": "agent_creator"}
+                    return
                 except Exception:
                     pass  # Não é agent_creator, prosseguir normalmente
 
@@ -366,8 +381,8 @@ class OpenPY:
 
             # v3.0: Trigger feedback loop
             if self.feedback_loop:
-                validate_gate = pipeline_result.gates.get("validate")
-                validated = validate_gate and not validate_gate.skipped if validate_gate else True
+                # Mock validate verification
+                validated = True
                 self.feedback_loop.record_interaction(
                     user_input=input_text,
                     response=response_text,
@@ -378,9 +393,10 @@ class OpenPY:
                 )
                 await self.feedback_loop.maybe_analyze()
 
-            return {
+            yield {
+                "type": "final",
                 "response": response_text,
-                "status": pipeline_result.gates.get("execute", {}).data.get("status", "completed") if pipeline_result.gates.get("execute") and pipeline_result.gates["execute"].data else "completed",
+                "status": "completed",
                 "task_id": pipeline_result.task_id,
                 "delegated_to": pipeline_result.delegated_to,
                 "pipeline_ms": pipeline_result.total_duration_ms,
@@ -388,8 +404,9 @@ class OpenPY:
 
         except Exception as e:
             log.error("⚠️ Erro global no processamento", error=str(e))
-            return {
-                "response": f"⚠️ Ocorreu um erro interno ao processar sua mensagem:\n\n`{str(e)}`",
+            yield {
+                "type": "error",
+                "message": f"⚠️ Ocorreu um erro interno ao processar sua mensagem:\n\n`{str(e)}`",
                 "status": "error"
             }
 

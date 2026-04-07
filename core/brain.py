@@ -32,7 +32,7 @@ Responda de forma natural, concisa e calorosa em português brasileiro.
 Seja direto e humano. NÃO use listas, protocolos ou formatação complexa.
 Para saudações responda brevemente como um amigo."""
 
-def build_core_system_prompt(soul: str, essence: str) -> str:
+def build_core_system_prompt(soul: str, essence: str, memories: list[dict] = None) -> str:
     """System prompt ENXUTO para o Core.
     v4.2: A memória semântica cuida do contexto. O prompt só define identidade e tom.
     Protocolo de 4 camadas removido (o pipeline já faz isso em código)."""
@@ -43,9 +43,13 @@ def build_core_system_prompt(soul: str, essence: str) -> str:
     essence_lines = [l.strip() for l in essence.split('\n') if l.strip() and not l.startswith('#')][:5]
     essence_summary = '\n'.join(essence_lines)
 
+    memory_context = ""
+    if memories:
+        memory_context = "\n\n=== CONTEXTO DA MEMÓRIA ===\n" + "\n".join([m.get("content", "") for m in memories])
+
     return f"""{essence_summary}
 
-{soul_identity}
+{soul_identity}{memory_context}
 
 Regras: responda em português brasileiro, seja direto e natural. Não invente informações. Use as memórias fornecidas como contexto."""
 

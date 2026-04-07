@@ -428,6 +428,129 @@ class LLMRouter:
                     "tool_calls": None,
                     "finish_reason": "stop",
                 }
-            except Exception:
-                raise
+            except Exception as inner_e:
+                log.error(f"Fallback complete também falhou: {inner_e}")
+                return {
+                    "content": f"Desculpe, ocorreu um erro interno: {str(e)}",
+                    "tool_calls": None,
+                    "finish_reason": "error",
+                }
+    async def stream_complete(self, messages: list, model: str = None,
+                              max_tokens: int = 2048, temperature: float = 0.7,
+                              thinking: bool = True, **kwargs):
+        """
+        Generates streamed response using AsyncGenerator.
+        Yields partial strings.
+        """
+        if not self._available or not self.router:
+            raise NoProviderAvailableError("Nenhum provedor LLM configurado")
+
+        target_model = model or self._active_provider or self._model_names[0]
+
+        call_kwargs = dict(kwargs)
+        if "extra_body" not in call_kwargs:
+            call_kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": thinking}
+            }
+
+        try:
+            log.info(f"🚀 Chamada LLM (Stream): {target_model}", thinking=thinking)
+            response = await self.router.acompletion(
+                model=target_model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                request_timeout=90,
+                stream=True,
+                **call_kwargs,
+            )
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta:
+                    content = getattr(chunk.choices[0].delta, 'content', None)
+                    reasoning = getattr(chunk.choices[0].delta, 'reasoning_content', None)
+                    if content:
+                        yield content
+                    elif reasoning: # Se for pensamento interno
+                        yield reasoning
+        except Exception as e:
+            log.warning(f"⚠️ Falha no provedor {target_model} stream: {str(e)}")
+            # Fallback simple
+            raise
+
+    async def stream_complete_with_tools(self, messages: list, tools: list[dict],
+                                         model: str = None, max_tokens: int = 4096,
+                                         temperature: float = 0.7,
+                                         tool_choice: str = "auto",
+                                         **kwargs):
+        """
+        Streaming support with tools.
+        Yields a dict on each step. If it finishes with tool_calls, yields:
+        {"type": "tool_calls", "tool_calls": [...]}
+        Otherwise yields text content:
+        {"type": "content", "content": "..."}
+        """
+        if not self._available or not self.router:
+            raise NoProviderAvailableError("Nenhum provedor LLM configurado")
+
+        target_model = model or self._active_provider or self._model_names[0]
+
+        call_kwargs = {
+            "model": target_model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "request_timeout": 90,
+            "stream": True,
+            **kwargs,
+        }
+
+        if tools:
+            call_kwargs["tools"] = tools
+            call_kwargs["tool_choice"] = tool_choice
+
+        try:
+            log.info(f"🔧 LLM + Tools (Stream): {target_model} ({len(tools)} tools)")
+            response = await self.router.acompletion(**call_kwargs)
+
+            tool_calls_buffer = {}
+
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta:
+                    delta = chunk.choices[0].delta
+                    
+                    # 1. Content streaming
+                    content = getattr(delta, 'content', None)
+                    reasoning = getattr(delta, 'reasoning_content', None)
+                    text_out = content or reasoning
+                    if text_out:
+                        yield {"type": "content", "content": text_out}
+                    
+                    # 2. Tool call streaming aggregation
+                    if getattr(delta, 'tool_calls', None):
+                        for tc in delta.tool_calls:
+                            idx = tc.index
+                            if idx not in tool_calls_buffer:
+                                tool_calls_buffer[idx] = {
+                                    "id": tc.id or "",
+                                    "function": {
+                                        "name": tc.function.name if tc.function and tc.function.name else "",
+                                        "arguments": tc.function.arguments if tc.function and tc.function.arguments else ""
+                                    }
+                                }
+                            else:
+                                if tc.id:
+                                    tool_calls_buffer[idx]["id"] += tc.id
+                                if tc.function and tc.function.name:
+                                    tool_calls_buffer[idx]["function"]["name"] += tc.function.name
+                                if tc.function and tc.function.arguments:
+                                    tool_calls_buffer[idx]["function"]["arguments"] += tc.function.arguments
+
+            # Após fechar stream, envia as tool calls
+            if tool_calls_buffer:
+                calls_list = [v for k, v in sorted(tool_calls_buffer.items())]
+                yield {"type": "tool_calls", "tool_calls": calls_list}
+
+        except Exception as e:
+            log.warning(f"⚠️ Tool streaming falhou: {e}")
+            raise
 
