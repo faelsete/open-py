@@ -84,9 +84,35 @@ ok "Sistema: ${PRETTY_NAME:-Linux} ($(uname -m))"
 ok "RAM: $(free -h | awk '/^Mem:/{print $2}') | Disco livre: $(df -h / | awk 'NR==2{print $4}')"
 
 TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-[[ "$TOTAL_RAM_MB" -lt 1024 ]] && warn "RAM abaixo de 1GB — pode haver lentidão"
+[[ "$TOTAL_RAM_MB" -lt 1024 ]] && warn "RAM abaixo de 1GB — modo MÍNIMO recomendado"
 
 echo "" > "$LOG_FILE"
+
+# ═══════════════════════════════════════════════════════════
+# MODO DE INSTALAÇÃO
+# ═══════════════════════════════════════════════════════════
+echo ""
+echo -e "  ${BOLD}Selecione o modo de instalação:${NC}"
+echo ""
+echo -e "  ${GREEN}1)${NC} ${BOLD}Mínimo${NC}  — Core + Telegram + LLM remoto (~300MB RAM)"
+echo -e "           Sem: voz, browser, PDFs, Ollama"
+echo -e "           Ideal para: VMs com 1-2GB RAM, teste rápido"
+echo ""
+echo -e "  ${CYAN}2)${NC} ${BOLD}Completo${NC} — Tudo instalado (~2GB RAM)"
+echo -e "           Com: voz (Whisper+Piper), browser, documentos, Ollama"
+echo -e "           Ideal para: VMs com 4GB+ RAM, produção"
+echo ""
+
+INSTALL_MODE=""
+while [[ -z "$INSTALL_MODE" ]]; do
+    read -rp "  Escolha [1/2]: " choice < /dev/tty
+    case "$choice" in
+        1) INSTALL_MODE="minimal"; ok "Modo MÍNIMO selecionado" ;;
+        2) INSTALL_MODE="full"; ok "Modo COMPLETO selecionado" ;;
+        *) echo -e "  ${RED}Opção inválida${NC}" ;;
+    esac
+done
+echo ""
 
 # ═══════════════════════════════════════════════════════════
 # [1/8] DEPENDÊNCIAS DO SISTEMA
@@ -100,10 +126,15 @@ apt-get update -qq >> "$LOG_FILE" 2>&1 || warn "apt update retornou warnings"
 PACKAGES=(
     python3 python3-pip python3-venv python3-dev
     postgresql postgresql-contrib
-    bubblewrap ffmpeg
+    bubblewrap
     curl wget jq openssl git
     build-essential libpq-dev
 )
+
+# Modo completo: adicionar ffmpeg (necessário para Voice)
+if [[ "$INSTALL_MODE" == "full" ]]; then
+    PACKAGES+=(ffmpeg)
+fi
 
 for pkg in "${PACKAGES[@]}"; do
     if dpkg -s "$pkg" &>/dev/null; then
@@ -305,11 +336,11 @@ if [[ ! -d "$VENV_DIR" ]]; then
 fi
 source "$VENV_DIR/bin/activate"
 
-step "Instalando dependências..."
+step "Instalando dependências core..."
 pip install --upgrade pip -q >> "$LOG_FILE" 2>&1
 
 if pip install -r "$INSTALL_DIR/requirements.txt" -q >> "$LOG_FILE" 2>&1; then
-    ok "Dependências instaladas com sucesso"
+    ok "Dependências core instaladas"
 else
     warn "Instalação em batch falhou. Instalando individualmente..."
     while IFS= read -r pkg; do
@@ -319,8 +350,26 @@ else
     done < "$INSTALL_DIR/requirements.txt"
 fi
 
+# Modo completo: instalar extras (voice, browser, documents)
+if [[ "$INSTALL_MODE" == "full" ]]; then
+    step "Instalando extras (voice, browser, documentos)..."
+    if pip install -r "$INSTALL_DIR/requirements-full.txt" -q >> "$LOG_FILE" 2>&1; then
+        ok "Extras instalados (voice + browser + documentos)"
+    else
+        warn "Alguns extras falharam — sistema funciona sem eles"
+    fi
+    
+    # Instalar browsers para Playwright
+    step "Instalando Chromium para browser tools..."
+    if python3 -m playwright install chromium >> "$LOG_FILE" 2>&1; then
+        ok "Chromium instalado"
+    else
+        warn "Chromium falhou — browser tools indisponíveis"
+    fi
+fi
+
 PKG_COUNT=$("$VENV_DIR/bin/pip" list 2>/dev/null | tail -n +3 | wc -l)
-ok "$PKG_COUNT pacotes instalados"
+ok "$PKG_COUNT pacotes instalados (modo: $INSTALL_MODE)"
 
 # ═══════════════════════════════════════════════════════════
 # [4.5/8] OLLAMA (Embeddings para busca semântica)
@@ -329,9 +378,9 @@ OLLAMA_INSTALLED=false
 EMBEDDING_MODEL="all-MiniLM-L6-v2"   # Fallback CPU padrão
 EMBEDDING_DIM=384
 
-if [[ "$TOTAL_RAM_MB" -ge 4096 ]]; then
+if [[ "$INSTALL_MODE" == "full" && "$TOTAL_RAM_MB" -ge 4096 ]]; then
     header "[4.5/8] Ollama (Embeddings Semânticos)"
-    echo -e "  ${DIM}RAM disponível: ${TOTAL_RAM_MB}MB (≥4GB → Ollama habilitado)${NC}"
+    echo -e "  ${DIM}RAM disponível: ${TOTAL_RAM_MB}MB (≥4GB + modo completo → Ollama habilitado)${NC}"
     echo ""
 
     if command -v ollama &>/dev/null; then
@@ -558,6 +607,15 @@ OPENROUTER_ENABLED=false; OPENROUTER_KEY=""; OPENROUTER_BASE="https://openrouter
 NVIDIA_ENABLED=false; NVIDIA_KEY=""; NVIDIA_BASE="https://integrate.api.nvidia.com/v1"
 OPENCODE_ENABLED=false; OPENCODE_KEY=""; OPENCODE_BASE=""
 DEFAULT_MODEL=""; FALLBACK_MODEL=""
+
+# v5.1: Voice config baseada no modo de instalação
+if [[ "$INSTALL_MODE" == "full" ]]; then
+    VOICE_STT_ENABLED=true
+    VOICE_TTS_ENABLED=true
+else
+    VOICE_STT_ENABLED=false
+    VOICE_TTS_ENABLED=false
+fi
 
 IFS=',' read -ra PROVIDERS <<< "$PROVIDER_SELECTION"
 for p in "${PROVIDERS[@]}"; do
@@ -824,11 +882,11 @@ cleanup_days = 7
 max_skill_age_days = 90
 
 [voice]
-stt_enabled = true
+stt_enabled = $VOICE_STT_ENABLED
 stt_model = "base"
 stt_device = "auto"
 stt_compute = "auto"
-tts_enabled = true
+tts_enabled = $VOICE_TTS_ENABLED
 tts_language = "pt-BR"
 tts_auto_reply = false
 tts_max_chars = 2000

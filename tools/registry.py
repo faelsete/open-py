@@ -359,8 +359,26 @@ class ToolRegistry:
 
             # Serializar resultado para string (LLM recebe texto)
             if isinstance(result, (dict, list)):
-                return json.dumps(result, ensure_ascii=False, indent=2, default=str)
-            return str(result)
+                result_str = json.dumps(result, ensure_ascii=False, indent=2, default=str)
+            else:
+                result_str = str(result)
+
+            # v5.1: Output Cleaner (RTK-style) — filtra ruído de CLI
+            if tool_name in ("shell_exec", "python_exec", "pip_install") and len(result_str) > 500:
+                try:
+                    from tools.output_cleaner import clean_output, compression_stats
+                    cleaned = clean_output(result_str, max_lines=150, max_chars=8000)
+                    stats = compression_stats(result_str, cleaned)
+                    if stats["savings_pct"] > 10:
+                        log.info("🧹 Output limpo",
+                                 tool=tool_name,
+                                 savings=f"{stats['savings_pct']}%",
+                                 tokens_saved=stats["tokens_saved_estimate"])
+                    result_str = cleaned
+                except ImportError:
+                    pass  # Cleaner não disponível — retorna bruto
+
+            return result_str
 
         except asyncio.TimeoutError:
             return json.dumps({"error": f"Tool '{tool_name}' timeout (60s)"})
