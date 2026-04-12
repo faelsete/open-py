@@ -17,7 +17,7 @@ VENV_DIR="$INSTALL_DIR/venv"
 DATA_DIR="$INSTALL_DIR/data"
 CONFIG_FILE="$INSTALL_DIR/openpy.toml"
 LOG_FILE="/var/log/open-py-install.log"
-OPENPY_VERSION="4.1.0-STABLE"
+OPENPY_VERSION="5.0.0"
 ERRORS=0
 
 # ════════════════ CORES ════════════════
@@ -63,7 +63,7 @@ echo -e "${CYAN}    ██║   ██║██╔═══╝ ██╔══�
 echo -e "${CYAN}    ╚██████╔╝██║     ███████╗██║ ╚████║   ██║        ██║${NC}"
 echo -e "${CYAN}     ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝   ╚═╝        ╚═╝${NC}"
 echo ""
-echo -e "    ${DIM}Framework de Agentes Autônomos v${OPENPY_VERSION}${NC}"
+echo -e "    ${DIM}Framework de Agentes Autônomos v${OPENPY_VERSION} (Cortex)${NC}"
 echo -e "    ${DIM}github.com/faelsete/open-py${NC}"
 echo ""
 
@@ -806,6 +806,23 @@ enabled = $OPENCODE_ENABLED
 heartbeat_interval_seconds = 60
 max_cron_jobs = 50
 
+[cortex]
+max_tool_iterations = 8
+shallow_max_tokens = 256
+light_max_tokens = 1024
+standard_max_tokens = 2048
+deep_max_tokens = 4096
+core_memory_persona_chars = 2000
+core_memory_user_chars = 2000
+core_memory_directives_chars = 2000
+
+[skill_store]
+enabled = true
+min_success_to_reuse = 2
+max_skills = 500
+cleanup_days = 7
+max_skill_age_days = 90
+
 [doctor]
 auto_repair = true
 snapshot_on_startup = true
@@ -827,7 +844,7 @@ except Exception as e:
     print(f'WARN: {e}', file=sys.stderr)
     sys.exit(0)
 " >> "$LOG_FILE" 2>&1; then
-    ok "Banco de dados configurado (6 tabelas)"
+    ok "Banco de dados configurado (8 tabelas v5.0)"
 else
     warn "Migrations com avisos — verifique com: openpy doctor"
 fi
@@ -865,7 +882,7 @@ ok "Serviço systemd criado e habilitado"
 # CLI
 cat > /usr/local/bin/openpy << 'CLIEOF'
 #!/bin/bash
-# Open-PY CLI v2.2
+# Open-PY CLI v5.0 (Cortex)
 INSTALL_DIR="/opt/open-py"
 VENV="$INSTALL_DIR/venv/bin/python3"
 
@@ -937,26 +954,46 @@ case "${1:-help}" in
         done
         echo ""
         echo "Para voltar: openpy rollback <tag>" ;;
+    skills)
+        cd "$INSTALL_DIR" && "$VENV" -c "
+import asyncio, sys
+sys.path.insert(0, '$INSTALL_DIR')
+from shared.config import load_config
+from shared.migrations import get_pool
+config = load_config()
+async def show():
+    pool = await get_pool(config.database)
+    rows = await pool.fetch('SELECT task_description, success_count, tools_used FROM skills ORDER BY success_count DESC LIMIT 10')
+    if not rows:
+        print('Nenhuma skill aprendida ainda.'); return
+    for r in rows:
+        print(f'  [{r["success_count"]}x] {r["task_description"][:60]} | tools: {r["tools_used"]}')
+asyncio.run(show())
+" ;;
+    cortex-stats)
+        cd "$INSTALL_DIR" && journalctl -u open-py --no-hostname --no-pager -n 200 | grep -E 'depth=|Cortex|tokens' | tail -20 ;;
     *)
         echo ""
-        echo "  🧠 Open-PY v$(cat $INSTALL_DIR/VERSION 2>/dev/null || echo '?')"
+        echo "  🧠 Open-PY v\$(cat \$INSTALL_DIR/VERSION 2>/dev/null || echo '?') (Cortex)"
         echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "  openpy start       Iniciar"
-        echo "  openpy stop        Parar"
-        echo "  openpy restart     Reiniciar"
-        echo "  openpy status      Status do serviço"
-        echo "  openpy logs        Logs em tempo real"
-        echo "  openpy logs -n 50  Últimas 50 linhas"
-        echo "  openpy doctor      Diagnóstico completo"
-        echo "  openpy config      Editar configuração"
-        echo "  openpy soul        Editar memória permanente"
-        echo "  openpy essence     Editar personalidade"
-        echo "  openpy update      Atualizar via GitHub"
-        echo "  openpy version     Ver versão"
-        echo "  openpy tags        Listar versões"
-        echo "  openpy rollback    Voltar para versão anterior"
-        echo "  openpy nuke        ☢️  Reset nuclear (apaga TUDO)"
-        echo "  openpy uninstall   Remover tudo"
+        echo "  openpy start         Iniciar"
+        echo "  openpy stop          Parar"
+        echo "  openpy restart       Reiniciar"
+        echo "  openpy status        Status do serviço"
+        echo "  openpy logs          Logs em tempo real"
+        echo "  openpy logs -n 50    Últimas 50 linhas"
+        echo "  openpy doctor        Diagnóstico completo"
+        echo "  openpy config        Editar configuração"
+        echo "  openpy soul          Editar memória permanente"
+        echo "  openpy essence       Editar personalidade"
+        echo "  openpy skills        Ver skills aprendidas"
+        echo "  openpy cortex-stats  Stats do Cortex"
+        echo "  openpy update        Atualizar via GitHub"
+        echo "  openpy version       Ver versão"
+        echo "  openpy tags          Listar versões"
+        echo "  openpy rollback      Voltar para versão anterior"
+        echo "  openpy nuke          ☢️  Reset nuclear (apaga TUDO)"
+        echo "  openpy uninstall     Remover tudo"
         echo "" ;;
 esac
 CLIEOF
