@@ -163,6 +163,10 @@ class OpenPY:
         # v5.0: Inicializar Core Memory blocks a partir de soul/essence
         self._init_core_memory()
 
+        # v5.0: Carregar core memory persistida do PostgreSQL (sobrescreve defaults se existir)
+        if self.memory_manager:
+            await self.memory_manager.load_core_memory()
+
         self._running = True
         log.info("🚀 Open-PY v5.0 pronto! (Cortex + SkillStore + Adaptive Thinking)")
 

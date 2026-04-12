@@ -835,6 +835,9 @@ class Cortex:
         success = blocks[block].update(content)
         if success:
             log.info("🧠 Core memory atualizada", block=block, chars=len(content))
+            # v5.0: Persistir no PostgreSQL em background
+            if hasattr(self.memory, 'save_core_memory'):
+                asyncio.create_task(self.memory.save_core_memory())
             return json.dumps({"status": "updated", "block": block})
         return json.dumps({"error": f"Conteúdo excede limite ({blocks[block].max_chars} chars)"})
 

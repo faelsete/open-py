@@ -1,7 +1,8 @@
 """
-Open-PY v4.0 — Tools Registry
+Open-PY v5.0 — Tools Registry
 Registro, controle e execução segura de ferramentas para agentes.
 Inclui: builtin tools, permission enforcement, schema generation.
+v5.0: Integração com BubblewrapSandbox para execute_command.
 """
 
 import asyncio
@@ -87,8 +88,41 @@ async def delete_file(path: str) -> str:
     return f"Arquivo deletado: {path}"
 
 
+# v5.0: Singleton da sandbox (inicializado sob demanda)
+_sandbox_instance = None
+
+def _get_sandbox():
+    """Retorna singleton da BubblewrapSandbox."""
+    global _sandbox_instance
+    if _sandbox_instance is None:
+        try:
+            from core.sandbox import BubblewrapSandbox
+            _sandbox_instance = BubblewrapSandbox()
+        except Exception:
+            _sandbox_instance = None
+    return _sandbox_instance
+
+
 async def execute_command(command: str, timeout: int = 30) -> dict:
-    """Executa comando shell com timeout"""
+    """Executa comando shell com timeout.
+    v5.0: Usa BubblewrapSandbox se disponível (filesystem readonly, network OFF)."""
+    sandbox = _get_sandbox()
+    if sandbox and sandbox.available:
+        result = await sandbox.execute(
+            command=command,
+            allowed_paths=["/opt/open-py", "/tmp"],
+            network=False,
+            timeout=timeout,
+        )
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+            "sandboxed": result.sandboxed,
+            "timed_out": result.timed_out,
+        }
+
+    # Fallback: execução direta (dev/Windows)
     proc = await asyncio.create_subprocess_shell(
         command,
         stdout=asyncio.subprocess.PIPE,
@@ -102,10 +136,11 @@ async def execute_command(command: str, timeout: int = 30) -> dict:
             "stdout": stdout.decode(errors='replace'),
             "stderr": stderr.decode(errors='replace'),
             "returncode": proc.returncode,
+            "sandboxed": False,
         }
     except asyncio.TimeoutError:
         proc.kill()
-        return {"error": f"Timeout ({timeout}s)", "returncode": -1}
+        return {"error": f"Timeout ({timeout}s)", "returncode": -1, "sandboxed": False}
 
 
 async def http_get(url: str, headers: dict = None) -> dict:

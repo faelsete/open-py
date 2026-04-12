@@ -1,12 +1,8 @@
 """
 Open-PY — Memory Manager
 3 camadas: Contexto (RAM) → memory.md (filesystem) → PostgreSQL (longo prazo)
-
-Formato de I/O:
-- Buffer (RAM):   list[dict] com {role, content, timestamp, tokens}
-- Filesystem:     data/memory/daily/YYYY-MM-DD_NNN.md (markdown)
-- PostgreSQL:     tabela 'memories' com id, content, source, tags[], embedding, created_at
-- Preferências:   tabela 'memories' com tag 'preferência/*' e importance >= 7
+v5.0: + Core Memory blocks (Letta-style), Ollama recovery automático,
+       get_embedding público, persistência de core memory no PostgreSQL.
 """
 
 import os
@@ -97,9 +93,14 @@ class MemoryManager:
         # LLM Router injetado para sumarização de memória
         self.llm_router = None
 
-        # v3.0: Ollama config para embeddings
+        # v5.0: Core Memory blocks (Letta-style, injetado pelo lifecycle)
+        self.core_memory: dict = {}
+
+        # v3.0/v5.0: Ollama config para embeddings COM recovery automático
         self._ollama_config = ollama_config
         self._use_ollama: bool = False
+        self._ollama_consecutive_failures: int = 0
+        self._ollama_backoff_until: Optional[datetime] = None
         if ollama_config and ollama_config.should_enable():
             self._use_ollama = True
             log.info("🦙 Ollama ativado para embeddings",
@@ -590,35 +591,49 @@ class MemoryManager:
 
     async def _get_embedding(self, text: str) -> Optional[list[float]]:
         """
-        v4.1: Gera embedding via Ollama (CPU/GPU) ou sentence-transformers (CPU fallback).
-        Ollama: bge-m3 (1024 dims, multilingual) — padrão quando RAM >= 4GB
-        Fallback: all-MiniLM-L6-v2 (384 dims, CPU)
+        v5.0: Gera embedding via Ollama (GPU) ou sentence-transformers (CPU).
+        Recovery automático: exponential backoff em vez de desabilitar permanentemente.
         """
-        # === CAMINHO 1: Ollama (se disponível e habilitado) ===
+        # === CAMINHO 1: Ollama (com recovery automático) ===
         if self._use_ollama and self._ollama_config:
-            try:
-                import aiohttp
-                timeout = aiohttp.ClientTimeout(total=self._ollama_config.request_timeout)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    resp = await session.post(
-                        f"{self._ollama_config.url}/api/embeddings",
-                        json={
-                            "model": self._ollama_config.embedding_model,
-                            "prompt": text[:8192]  # nomic-embed-text suporta 8192 tokens
-                        }
-                    )
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return data.get("embedding")
-                    else:
-                        log.warning("⚠️ Ollama retornou status", status=resp.status)
-                        # Fallback para sentence-transformers
-            except Exception as e:
-                log.warning("⚠️ Ollama indisponível, fallback para CPU", error=str(e))
-                # Desabilitar Ollama temporariamente para evitar spam de erros
-                self._use_ollama = False
+            # Verificar backoff
+            if self._ollama_backoff_until and datetime.now() < self._ollama_backoff_until:
+                pass  # Skip Ollama, usar fallback
+            else:
+                try:
+                    import aiohttp
+                    timeout = aiohttp.ClientTimeout(total=self._ollama_config.request_timeout)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        resp = await session.post(
+                            f"{self._ollama_config.url}/api/embeddings",
+                            json={
+                                "model": self._ollama_config.embedding_model,
+                                "prompt": text[:8192]
+                            }
+                        )
+                        if resp.status == 200:
+                            data = await resp.json()
+                            # Recovery: reset backoff on success
+                            if self._ollama_consecutive_failures > 0:
+                                log.info("✅ Ollama recuperado após falhas",
+                                         failures=self._ollama_consecutive_failures)
+                            self._ollama_consecutive_failures = 0
+                            self._ollama_backoff_until = None
+                            return data.get("embedding")
+                        else:
+                            log.warning("⚠️ Ollama retornou status", status=resp.status)
+                except Exception as e:
+                    self._ollama_consecutive_failures += 1
+                    # Exponential backoff: 15s, 30s, 60s, 120s, 300s (max 5min)
+                    from datetime import timedelta
+                    backoff_seconds = min(15 * (2 ** (self._ollama_consecutive_failures - 1)), 300)
+                    self._ollama_backoff_until = datetime.now() + timedelta(seconds=backoff_seconds)
+                    log.warning("⚠️ Ollama falhou, backoff",
+                                error=str(e),
+                                failures=self._ollama_consecutive_failures,
+                                retry_in=f"{backoff_seconds}s")
 
-        # === CAMINHO 2: sentence-transformers (CPU fallback) ===
+        # === CAMINHO 2: sentence-transformers (CPU fallback, SEMPRE disponível) ===
         try:
             if self._embedder is None:
                 from sentence_transformers import SentenceTransformer
@@ -631,3 +646,77 @@ class MemoryManager:
         except Exception as e:
             log.warning("⚠️ Erro gerando embedding", error=str(e))
             return None
+
+    async def get_embedding(self, text: str) -> Optional[list[float]]:
+        """v5.0: Método público para gerar embedding (usado pelo SkillStore)."""
+        return await self._get_embedding(text)
+
+    # ============================================
+    # v5.0: CORE MEMORY PERSISTENCE (PostgreSQL)
+    # ============================================
+
+    async def save_core_memory(self, user_id: int = 0):
+        """Persiste core memory blocks no PostgreSQL."""
+        if not self.db or not self.core_memory:
+            return
+
+        try:
+            for name, block in self.core_memory.items():
+                await self.db.execute(
+                    """INSERT INTO core_memory_blocks (user_id, block_name, content, max_chars, updated_at)
+                       VALUES ($1, $2, $3, $4, NOW())
+                       ON CONFLICT (user_id, block_name) DO UPDATE SET
+                           content = $3, updated_at = NOW()""",
+                    user_id, name, block.content, block.max_chars,
+                )
+            log.info("💾 Core memory persistida", blocks=len(self.core_memory))
+        except Exception as e:
+            log.warning("⚠️ Erro persistindo core memory", error=str(e))
+
+    async def load_core_memory(self, user_id: int = 0):
+        """Carrega core memory blocks do PostgreSQL."""
+        if not self.db:
+            return
+
+        try:
+            from shared.models import CoreMemoryBlock
+            rows = await self.db.fetch(
+                "SELECT block_name, content, max_chars, updated_at FROM core_memory_blocks WHERE user_id = $1",
+                user_id,
+            )
+            for row in rows:
+                name = row["block_name"]
+                if name in self.core_memory:
+                    # Atualizar bloco existente com conteúdo do banco
+                    self.core_memory[name].content = row["content"]
+                    self.core_memory[name].last_updated = row["updated_at"]
+                else:
+                    self.core_memory[name] = CoreMemoryBlock(
+                        name=name,
+                        content=row["content"],
+                        max_chars=row["max_chars"],
+                        last_updated=row["updated_at"],
+                    )
+            if rows:
+                log.info("✅ Core memory carregada do PostgreSQL", blocks=len(rows))
+        except Exception as e:
+            log.warning("⚠️ Erro carregando core memory", error=str(e))
+
+    async def ollama_health_check(self) -> bool:
+        """v5.0: Health check do Ollama — chamado pelo scheduler periodicamente."""
+        if not self._ollama_config:
+            return False
+        try:
+            import aiohttp
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                resp = await session.get(f"{self._ollama_config.url}/api/tags")
+                if resp.status == 200:
+                    if self._ollama_consecutive_failures > 0:
+                        log.info("✅ Ollama voltou! Reset de backoff.")
+                        self._ollama_consecutive_failures = 0
+                        self._ollama_backoff_until = None
+                    return True
+        except Exception:
+            pass
+        return False
