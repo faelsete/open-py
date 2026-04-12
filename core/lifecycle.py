@@ -1,7 +1,7 @@
 """
 Open-PY — Lifecycle Manager
 Controla startup, running e shutdown do sistema inteiro.
-v2.0: Versionamento de SOUL/ESSENCE, healthcheck
+v5.0: Cortex como motor principal, SkillStore, Core Memory
 """
 
 import asyncio
@@ -48,15 +48,18 @@ class OpenPY:
         self._soul = ""
         self._essence = ""
 
-        # v3.0: Novos subsistemas
+        # v3.0: Subsistemas
         self.pipeline = None
         self.validator = None
         self.extractor = None
         self.feedback_loop = None
-        self.neural_engine = None  # v4.1: Motor de raciocínio
+        self.neural_engine = None
+
+        # v5.0: Cortex + SkillStore
+        self.cortex = None
+        self.skill_store = None
 
         # Histórico conversacional por usuário (RAM)
-        # Chave: user_id (int) → Valor: lista de {role, content}
         self._conversation_histories: dict[int, list[dict]] = {}
         
         # Guardar pendentes para confirmação
@@ -130,53 +133,38 @@ class OpenPY:
         )
         log.info("✅ Memory Extractor pronto")
 
-        # 11. v4.1: Neural Engine (Raciocínio antes de agir)
-        from core.neural import NeuralEngine
-        self.neural_engine = NeuralEngine(
-            llm_router=self.llm_router,
-            memory_manager=self.memory_manager,
-            tool_registry=getattr(self, 'tool_registry', None),
-            agent_registry=self.agent_registry,
-        )
-        log.info("✅ Neural Engine pronto (raciocínio antes da ação)")
+        # 11. v5.0: Skill Store (banco de habilidades aprendidas)
+        await self._init_skill_store()
 
-        # 12. v4.1: Query Engine (Streaming pipeline)
-        from core.engine import QueryEngine
-        self.pipeline = QueryEngine(
-            config=self.config,
-            brain=self.brain,
-            orchestrator=self.orchestrator,
-            memory_manager=self.memory_manager,
-            llm_router=self.llm_router,
-            validator=self.validator,
-            neural_engine=self.neural_engine,
-            tool_registry=getattr(self, 'tool_registry', None),
-        )
-        log.info("✅ QueryEngine v4.1 pronto (Streaming)")
+        # 12. v5.0: Cortex (core unificado — substitui pipeline + neural engine)
+        await self._init_cortex()
 
-        # 12. v3.0: Feedback Loop
+        # 13. v3.0: Feedback Loop
         from core.feedback_loop import FeedbackLoop
         self.feedback_loop = FeedbackLoop(
             llm_router=self.llm_router,
             memory_manager=self.memory_manager,
-            pipeline=self.pipeline,
+            pipeline=self.cortex,  # v5.0: Cortex substitui pipeline
             orchestrator=self.orchestrator,
             validator=self.validator,
         )
         log.info("✅ Feedback Loop pronto")
 
-        # 13. Scheduler (heartbeat + cron)
+        # 14. Scheduler (heartbeat + cron)
         await self._init_scheduler()
 
-        # 14. Telegram Bot
+        # 15. Telegram Bot
         await self._init_telegram()
         
         # Injetar LLM router na Memória para Compactação
         if self.memory_manager and self.llm_router:
             self.memory_manager.llm_router = self.llm_router
 
+        # v5.0: Inicializar Core Memory blocks a partir de soul/essence
+        self._init_core_memory()
+
         self._running = True
-        log.info("🚀 Open-PY v4.1 pronto! (Neural Thinking + Tool Engine + Pipeline 7 Gates)")
+        log.info("🚀 Open-PY v5.0 pronto! (Cortex + SkillStore + Adaptive Thinking)")
 
     # ============================================
     # RUNNING
@@ -307,11 +295,11 @@ class OpenPY:
                 yield {"type": "final", "response": response_text, "status": "completed"}
                 return
 
-            # === v3.0: PIPELINE STREAMING ===
+            # === v5.0: CORTEX STREAMING ===
             history = self._get_conversation_history(user_id)
             
-            pipeline_result = None
-            async for event in self.pipeline.run(
+            cortex_result = None
+            async for event in self.cortex.process(
                 raw_input=input_text,
                 input_type=input_type,
                 attachments=attachments,
@@ -321,26 +309,26 @@ class OpenPY:
                 essence=self._essence,
             ):
                 if event["type"] == "final":
-                    pipeline_result = event["pipeline_result"]
+                    cortex_result = event.get("cortex_result") or event.get("pipeline_result")
                 else:
                     yield event
 
-            if not pipeline_result:
-                yield {"type": "error", "message": "Pipeline falhou ao retornar resultado final."}
+            if not cortex_result:
+                yield {"type": "error", "message": "Cortex falhou ao retornar resultado final."}
                 return
 
-            if not pipeline_result.success:
-                error_msg = f"⚠️ Pipeline falhou: {getattr(pipeline_result, 'error', 'Erro desconhecido')}"
+            if not cortex_result.success:
+                error_msg = f"⚠️ Cortex falhou: {getattr(cortex_result, 'error', 'Erro desconhecido')}"
                 log.error(error_msg)
                 yield {"type": "error", "message": error_msg}
                 return
 
-            response_text = pipeline_result.response
+            response_text = cortex_result.response
 
             # === PÓS-PROCESSAMENTO ===
 
             # Agent Creator flow (pending confirmation)
-            if pipeline_result.delegated_to == "agent_creator":
+            if cortex_result.delegated_to == "agent_creator":
                 import json as _json
                 import re as _re
                 try:
@@ -359,15 +347,11 @@ class OpenPY:
                             "delegated_to": "agent_creator"}
                     return
                 except Exception:
-                    pass  # Não é agent_creator, prosseguir normalmente
+                    pass
 
             # Salvar no histórico conversacional (RAM)
             self._add_to_conversation(user_id, "user", input_text)
             self._add_to_conversation(user_id, "assistant", response_text)
-
-            # Salvar na memória de longo prazo
-            if self.memory_manager:
-                await self.memory_manager.buffer_interaction(input_text, response_text)
 
             # v3.0: Trigger extração de memórias em background
             if self.extractor and self.memory_manager:
@@ -379,17 +363,15 @@ class OpenPY:
                     self.memory_manager._buffer_tokens
                 )
 
-            # v3.0: Trigger feedback loop
+            # Feedback loop
             if self.feedback_loop:
-                # Mock validate verification
-                validated = True
                 self.feedback_loop.record_interaction(
                     user_input=input_text,
                     response=response_text,
                     input_type=input_type,
-                    delegated_to=pipeline_result.delegated_to,
-                    validated=validated,
-                    duration_ms=pipeline_result.total_duration_ms,
+                    delegated_to=cortex_result.delegated_to,
+                    validated=True,
+                    duration_ms=cortex_result.total_duration_ms,
                 )
                 await self.feedback_loop.maybe_analyze()
 
@@ -397,9 +379,10 @@ class OpenPY:
                 "type": "final",
                 "response": response_text,
                 "status": "completed",
-                "task_id": pipeline_result.task_id,
-                "delegated_to": pipeline_result.delegated_to,
-                "pipeline_ms": pipeline_result.total_duration_ms,
+                "task_id": cortex_result.task_id,
+                "delegated_to": cortex_result.delegated_to,
+                "pipeline_ms": cortex_result.total_duration_ms,
+                "depth": cortex_result.depth,
             }
 
         except Exception as e:
@@ -734,3 +717,111 @@ class OpenPY:
             log.info("✅ Telegram bot configurado")
         except Exception as e:
             log.warning("⚠️ Erro no Telegram bot", error=str(e))
+
+    # ============================================
+    # v5.0: INIT CORTEX + SKILL STORE + CORE MEMORY
+    # ============================================
+
+    async def _init_cortex(self):
+        """v5.0: Inicializa o Cortex (core unificado)"""
+        try:
+            from core.cortex import Cortex
+            self.cortex = Cortex(
+                config=self.config,
+                brain=self.brain,
+                orchestrator=self.orchestrator,
+                memory_manager=self.memory_manager,
+                llm_router=self.llm_router,
+                validator=self.validator,
+                tool_registry=getattr(self, 'tool_registry', None),
+                skill_store=self.skill_store,
+            )
+            # Alias para backward compat: self.pipeline aponta pro Cortex
+            self.pipeline = self.cortex
+            log.info("✅ Cortex v5.0 pronto (Adaptive Thinking + Agentic Loop)")
+        except Exception as e:
+            log.error("❌ Erro inicializando Cortex", error=str(e))
+            # Fallback: tentar carregar engine antigo
+            try:
+                from core.engine import QueryEngine
+                self.pipeline = QueryEngine(
+                    config=self.config,
+                    brain=self.brain,
+                    orchestrator=self.orchestrator,
+                    memory_manager=self.memory_manager,
+                    llm_router=self.llm_router,
+                    validator=self.validator,
+                    neural_engine=None,
+                    tool_registry=getattr(self, 'tool_registry', None),
+                )
+                self.cortex = self.pipeline  # Usar engine como cortex
+                log.warning("⚠️ Fallback para QueryEngine v4.1")
+            except Exception as e2:
+                log.error("❌ Engine fallback também falhou", error=str(e2))
+
+    async def _init_skill_store(self):
+        """v5.0: Inicializa banco de habilidades aprendidas"""
+        try:
+            from memory.skill_store import SkillStore
+            self.skill_store = SkillStore(
+                db_pool=self.db_pool,
+                config=self.config.skill_store,
+                memory_manager=self.memory_manager,
+            )
+            log.info("✅ Skill Store v5.0 pronto")
+        except Exception as e:
+            log.warning("⚠️ Skill Store indisponível", error=str(e))
+            self.skill_store = None
+
+    def _init_core_memory(self):
+        """v5.0: Inicializa Core Memory blocks a partir de soul/essence"""
+        if not self.memory_manager:
+            return
+
+        from shared.models import CoreMemoryBlock
+
+        core_memory: dict[str, CoreMemoryBlock] = {
+            "persona": CoreMemoryBlock(
+                name="persona",
+                content=self._extract_persona_text(self._soul, self._essence),
+                max_chars=self.config.cortex.core_memory_persona_chars,
+            ),
+            "user_info": CoreMemoryBlock(
+                name="user_info",
+                content="",  # Preenchido pelo agente via tool calls
+                max_chars=self.config.cortex.core_memory_user_chars,
+            ),
+            "directives": CoreMemoryBlock(
+                name="directives",
+                content=self._extract_directives(self._essence),
+                max_chars=self.config.cortex.core_memory_directives_chars,
+            ),
+        }
+        self.memory_manager.core_memory = core_memory
+        log.info("✅ Core Memory blocks inicializados",
+                 blocks=len(core_memory),
+                 persona_chars=len(core_memory['persona'].content),
+                 directives_chars=len(core_memory['directives'].content))
+
+    def _extract_persona_text(self, soul: str, essence: str) -> str:
+        """Extrai texto de persona a partir de soul + essence."""
+        parts: list[str] = []
+        if essence:
+            lines = [l.strip() for l in essence.split('\n') if l.strip() and not l.startswith('#')]
+            parts.extend(lines[:5])
+        if soul:
+            lines = [l.strip() for l in soul.split('\n') if l.strip() and not l.startswith('#')]
+            parts.extend(lines[:5])
+        return '\n'.join(parts) if parts else "Assistente técnico autônomo. Responde em português brasileiro."
+
+    def _extract_directives(self, essence: str) -> str:
+        """Extrai diretivas/regras do essence."""
+        if not essence:
+            return "Responda em português brasileiro de forma direta e objetiva."
+        # Extrair linhas que pareçam regras (começam com -, *, ou contêm palavras-chave)
+        directives: list[str] = []
+        for line in essence.split('\n'):
+            line = line.strip()
+            if line.startswith(('-', '*', '•')) or any(kw in line.lower() for kw in ['sempre', 'nunca', 'regra', 'obrigat']):
+                directives.append(line)
+        return '\n'.join(directives[:15]) if directives else essence[:500]

@@ -1,7 +1,8 @@
 """
 Open-PY — Thinking Engine (Cérebro)
-4 camadas de raciocínio obrigatório antes de qualquer resposta.
-Inspirado em: Claude Extended Thinking + Hierarchical Supervisor-Worker.
+v5.0: Funções puras de classificação e construção de prompt.
+O Cortex (cortex.py) é agora o motor principal de raciocínio.
+ThinkingEngine mantida para backward compat com lifecycle.py e pipeline.py.
 """
 
 import re

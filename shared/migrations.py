@@ -126,6 +126,39 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id);
 
 CREATE INDEX IF NOT EXISTS idx_agent_logs_agent ON agent_logs(agent_id, created_at DESC);
+
+-- ============================================
+-- TABELA: SKILLS (Habilidades aprendidas) v5.0
+-- ============================================
+CREATE TABLE IF NOT EXISTS skills (
+    id              BIGSERIAL PRIMARY KEY,
+    task_hash       VARCHAR(64) NOT NULL,
+    task_description TEXT NOT NULL,
+    steps_json      JSONB NOT NULL DEFAULT '[]',
+    tools_used      TEXT[] NOT NULL DEFAULT '{{}}',
+    success_count   INTEGER NOT NULL DEFAULT 0,
+    failure_count   INTEGER NOT NULL DEFAULT 0,
+    avg_duration_s  REAL DEFAULT 0.0,
+    embedding       vector({dim}),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(task_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_skills_hash ON skills(task_hash);
+CREATE INDEX IF NOT EXISTS idx_skills_last_used ON skills(last_used DESC);
+
+-- ============================================
+-- TABELA: CORE MEMORY BLOCKS v5.0
+-- ============================================
+CREATE TABLE IF NOT EXISTS core_memory_blocks (
+    user_id         BIGINT NOT NULL,
+    block_name      VARCHAR(50) NOT NULL,
+    content         TEXT NOT NULL DEFAULT '',
+    max_chars       INTEGER NOT NULL DEFAULT 2000,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, block_name)
+);
 """
 
 # v4.1: Migração para alterar dimensões de vector em DBs existentes
@@ -194,7 +227,7 @@ async def check_tables(dsn: str) -> dict[str, bool]:
         """)
         existing = {r['tablename'] for r in tables}
         required = {'memories', 'daily_compilations', 'tasks', 'agent_logs',
-                     'agent_configs', 'cron_jobs'}
+                     'agent_configs', 'cron_jobs', 'skills', 'core_memory_blocks'}
         return {t: t in existing for t in required}
     finally:
         await conn.close()

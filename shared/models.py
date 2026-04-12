@@ -1,6 +1,7 @@
 """
 Open-PY — Modelos de Dados Globais
 Pydantic models compartilhados entre todos os módulos.
+v5.0: + DepthLevel, CoreMemoryBlock, Skill, CortexResult
 """
 
 from dataclasses import dataclass, field
@@ -25,6 +26,14 @@ class InputType(str, Enum):
     COMMAND = "command"
     AUTOMATION = "automation"
     UNKNOWN = "unknown"
+
+
+class DepthLevel(int, Enum):
+    """Profundidade de raciocínio — define modelo, tokens, contexto."""
+    SHALLOW = 0     # Saudações, confirmações → resposta instantânea
+    LIGHT = 1       # Perguntas simples, conversa casual
+    STANDARD = 2    # Tarefas com tools, código, pesquisa
+    DEEP = 3        # Arquitetura, multi-step, debugging complexo
 
 
 class Urgency(str, Enum):
@@ -63,6 +72,8 @@ class MemoryType(str, Enum):
     ERROR = "error"
     PROJECT = "project"
     INTERACTION = "interaction"
+    SKILL = "skill"
+    FEEDBACK = "feedback"
 
 
 # ============================================
@@ -271,3 +282,59 @@ class CircuitBreakerState(BaseModel):
                 self.consecutive_failures = 0
                 return True
         return False
+
+
+# ============================================
+# MODELOS v5.0 — CORTEX
+# ============================================
+
+class CoreMemoryBlock(BaseModel):
+    """Bloco editável de core memory (in-context, Letta-style).
+    O agente pode ler e atualizar esses blocos via tool calls.
+    """
+    name: str = ""
+    content: str = ""
+    max_chars: int = 2000
+    last_updated: datetime = Field(default_factory=datetime.now)
+
+    def update(self, new_content: str) -> bool:
+        """Atualiza conteúdo respeitando limite de caracteres."""
+        if len(new_content) > self.max_chars:
+            return False
+        self.content = new_content
+        self.last_updated = datetime.now()
+        return True
+
+    def to_prompt(self) -> str:
+        """Renderiza para inclusão no system prompt."""
+        if not self.content:
+            return ""
+        return f"<{self.name}>\n{self.content}\n</{self.name}>"
+
+
+class Skill(BaseModel):
+    """Habilidade aprendida pelo sistema (task executada com sucesso)."""
+    id: Optional[int] = None
+    task_hash: str = ""
+    task_description: str = ""
+    steps_json: list[dict[str, Any]] = Field(default_factory=list)
+    tools_used: list[str] = Field(default_factory=list)
+    success_count: int = 0
+    failure_count: int = 0
+    avg_duration_seconds: float = 0.0
+    last_used: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class CortexResult(BaseModel):
+    """Resultado unificado do Cortex (substitui PipelineResult para novos fluxos)."""
+    success: bool = True
+    response: str = ""
+    depth: int = 1
+    delegated_to: Optional[str] = None
+    task_id: Optional[str] = None
+    tools_called: list[str] = Field(default_factory=list)
+    skill_used: Optional[str] = None
+    total_duration_ms: float = 0.0
+    tokens_used: int = 0
+    error: Optional[str] = None

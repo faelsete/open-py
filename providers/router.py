@@ -2,6 +2,7 @@
 Open-PY — LLM Router
 Wrapper sobre LiteLLM para unificar múltiplos provedores.
 Suporta: OpenAI, Anthropic, OpenRouter, NVIDIA NIM, OpenCode (custom).
+v5.0: Cortex controla thinking adaptativo por depth level.
 """
 
 from litellm import Router as LiteLLMRouter

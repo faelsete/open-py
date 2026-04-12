@@ -22,7 +22,6 @@ from shared.config import CoreConfig, TelegramConfig
 from shared.logger import setup_logging, get_logger
 from .updater import MessageUpdater
 from core.audit_log import AuditLog
-from core.auto_learner import AutoLearner
 from core.rate_limiter import RateLimiter
 
 log = get_logger("telegram")
@@ -71,12 +70,6 @@ class TelegramBot:
         self.batcher = MessageBatcher(
             process_callback=self._process_batched_message,
             batch_window=2.0,
-        )
-
-        # Auto-Learner: salva tudo e aprende preferências
-        self.learner = AutoLearner(
-            memory_manager=core.memory_manager if hasattr(core, 'memory_manager') else None,
-            db_pool=core.db_pool if hasattr(core, 'db_pool') else None,
         )
 
         # Cache de messages para callback

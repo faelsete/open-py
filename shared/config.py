@@ -89,23 +89,50 @@ class OllamaConfig(BaseModel):
 
 
 class PipelineConfig(BaseModel):
-    """Configuração do túnel de execução v4.1"""
-    enabled: bool = True
-    # Gates individuais (todos ON por padrão)
+    """[DEPRECATED v5.0] Configuração do túnel de execução v4.1 — mantida para backward compat."""
+    enabled: bool = False  # v5.0: Desabilitado, substituído pelo Cortex
     gate_memory_recall: bool = True
-    gate_validate: bool = False  # v4.2: OFF (2ª chamada LLM desnecessária, +17s latência)
-    gate_think: bool = False       # v4.1: OFF — evita chamada LLM duplicada (think+execute em paralelo sobrecarrega API)
-    # Circuit breaker
+    gate_validate: bool = False
+    gate_think: bool = False
     max_gate_failures: int = 3
     gate_cooldown_minutes: int = 5
-    # Timeouts por gate (segundos)
     gate_timeout_capture: int = 5
-    gate_timeout_memory: int = 30    # v4.1: Aumentado (1ª carga do modelo de embeddings pode demorar)
+    gate_timeout_memory: int = 30
     gate_timeout_route: int = 5
-    gate_timeout_think: int = 60     # v4.1: Aumentado (reasoning completo precisa de tempo)
+    gate_timeout_think: int = 60
     gate_timeout_prepare: int = 5
-    gate_timeout_execute: int = 180  # v4.1: 3min (com think OFF, 1 chamada LLM basta)
-    gate_timeout_validate: int = 30  # v4.1: Aumentado (validação também chama LLM)
+    gate_timeout_execute: int = 180
+    gate_timeout_validate: int = 30
+
+
+class CortexConfig(BaseModel):
+    """v5.0: Configuração do Cortex (core unificado com thinking adaptativo)."""
+    enabled: bool = True
+    # Tokens máximos por depth level
+    depth_0_max_tokens: int = 200
+    depth_1_max_tokens: int = 1024
+    depth_2_max_tokens: int = 4096
+    depth_3_max_tokens: int = 8192
+    # Modelos por depth (vazio = usa default_model da config core)
+    depth_0_model: str = ""   # Modelo mais barato para saudações
+    depth_3_model: str = ""   # Modelo melhor para tarefas complexas
+    # Agentic loop
+    max_tool_iterations: int = 15
+    tool_timeout_seconds: int = 60
+    # Core memory limits
+    core_memory_persona_chars: int = 1000
+    core_memory_user_chars: int = 2000
+    core_memory_directives_chars: int = 1500
+
+
+class SkillStoreConfig(BaseModel):
+    """v5.0: Configuração do banco de habilidades aprendidas."""
+    enabled: bool = True
+    min_success_to_reuse: int = 2         # Usa skill após N sucessos
+    similarity_threshold: float = 0.85     # Threshold para considerar tarefa similar
+    max_skills: int = 500                  # Limite de skills no banco
+    cleanup_days: int = 7                  # Limpa skills com 0 sucessos após N dias
+    max_skill_age_days: int = 90           # Idade máxima sem uso antes de purge
 
 
 class ValidatorConfig(BaseModel):
@@ -151,7 +178,9 @@ class OpenPYConfig(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
-    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)  # deprecated v5.0
+    cortex: CortexConfig = Field(default_factory=CortexConfig)        # v5.0: substitui pipeline
+    skill_store: SkillStoreConfig = Field(default_factory=SkillStoreConfig)  # v5.0
     validator: ValidatorConfig = Field(default_factory=ValidatorConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
