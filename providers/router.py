@@ -67,9 +67,8 @@ class LLMRouter:
             litellm_model = self._apply_prefix(name, raw_model)
 
             kwargs = {}
-            if name == "nvidia":
-                kwargs["api_base"] = p.api_base or "https://integrate.api.nvidia.com/v1"
-            elif name == "opencode":
+            # nvidia_nim/ prefix já sabe a api_base — não duplicar
+            if name == "opencode":
                 kwargs["api_base"] = p.api_base
 
             self._add_to_list(name, litellm_model, p.api_key, **kwargs)
@@ -87,6 +86,9 @@ class LLMRouter:
         }
         if api_base:
             entry["litellm_params"]["api_base"] = api_base
+        # nvidia_nim: drop params que o modelo não suporta (evita 4xx)
+        if name == "nvidia":
+            entry["litellm_params"]["drop_params"] = True
         self._model_list.append(entry)
         self._provider_models[name] = model
         log.info(f"✅ {name} adicionado (modelo: {model})")
