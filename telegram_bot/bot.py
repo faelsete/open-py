@@ -80,6 +80,16 @@ class TelegramBot:
         self.queue = TaskQueue(max_concurrent=1)
         self.queue.set_processor(self._core_processor)
 
+        # v4.0: Auto Learner (aprende com cada interação)
+        try:
+            from core.auto_learner import AutoLearner
+            self.learner = AutoLearner(
+                memory_manager=getattr(core, 'memory_manager', None),
+                db_pool=getattr(core, 'db_pool', None),
+            )
+        except Exception:
+            self.learner = None
+
         # Registrar handlers
         self._register_handlers()
 
@@ -673,12 +683,13 @@ class TelegramBot:
                         )
                 
                 # Learner (background)
-                asyncio.create_task(self.learner.learn_from_interaction(
-                    user_input=input_text,
-                    bot_response=content,
-                    user_id=user_id,
-                    input_type=msg_data.get("input_type", "text")
-                ))
+                if self.learner:
+                    asyncio.create_task(self.learner.learn_from_interaction(
+                        user_input=input_text,
+                        bot_response=content,
+                        user_id=user_id,
+                        input_type=msg_data.get("input_type", "text")
+                    ))
 
         task = QueuedTask(
             task_id=f"msg-{uuid.uuid4().hex[:8]}",

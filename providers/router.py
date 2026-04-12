@@ -34,7 +34,7 @@ class LLMRouter:
         "openai": "",           # OpenAI não precisa de prefixo
         "anthropic": "",        # Anthropic não precisa de prefixo
         "openrouter": "openrouter/",
-        "nvidia": "openai/",    # NVIDIA usa endpoint OpenAI-compatible
+        "nvidia": "nvidia_nim/",  # NVIDIA NIM — prefixo nativo do LiteLLM
         "opencode": "openai/",  # Custom endpoint OpenAI-compatible
     }
 
@@ -294,18 +294,21 @@ class LLMRouter:
 
         try:
             log.info(f"🚀 Chamada LLM: {target_model}", thinking=thinking)
-            # v4.2: Thinking adaptativo — ON por padrão, fast path pode desligar
             call_kwargs = dict(kwargs)
+            # v5.1: enable_thinking só para modelos que suportam (qwen3, deepseek-r1)
             if thinking and "extra_body" not in call_kwargs:
-                call_kwargs["extra_body"] = {
-                    "chat_template_kwargs": {"enable_thinking": True}
-                }
+                active_model = self._provider_models.get(target_model, "")
+                thinking_models = ("qwen3", "qwen2.5", "deepseek-r1", "deepseek-v3")
+                if any(tm in active_model.lower() for tm in thinking_models):
+                    call_kwargs["extra_body"] = {
+                        "chat_template_kwargs": {"enable_thinking": True}
+                    }
             response = await self.router.acompletion(
                 model=target_model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                request_timeout=90,  # v4.2: 90s (thinking pode demorar mais)
+                request_timeout=90,
                 **call_kwargs,
             )
             # Log de tokens consumidos
