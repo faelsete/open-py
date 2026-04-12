@@ -201,9 +201,12 @@ class OpenPY:
     # ============================================
 
     async def shutdown(self):
-        """Shutdown graceful — salva tudo, para tudo, limpa tudo"""
+        """v5.1: Shutdown graceful — persiste estado, salva tudo, para tudo."""
         log.info("🛑 Open-PY encerrando...")
         self._running = False
+
+        # 0. v5.1: Persistir session state (core memory + conversation summary)
+        await self._persist_session_state()
 
         # 1. Salvar memórias pendentes
         if self.memory_manager:
@@ -246,6 +249,42 @@ class OpenPY:
                 log.error("Erro fechando DB", error=str(e))
 
         log.info("👋 Open-PY encerrado com sucesso")
+
+    # ============================================
+    # v5.1: SESSION STATE PERSISTENCE
+    # ============================================
+
+    async def _persist_session_state(self):
+        """v5.1: Salva estado completo antes de shutdown."""
+        try:
+            # 1. Core memory → PostgreSQL
+            if self.memory_manager:
+                await self.memory_manager.save_core_memory()
+                log.info("💾 Core memory persistida no shutdown")
+
+            # 2. Cortex metrics snapshot → memory
+            if self.cortex and self.memory_manager and self.memory_manager.db:
+                metrics = self.cortex.get_metrics()
+                await self.memory_manager.save_memory(
+                    content=f"[Sessão encerrada {datetime.now().isoformat()}] "
+                            f"Requests: {metrics['total_requests']}, "
+                            f"Depths: {metrics['depth_distribution']}, "
+                            f"Tokens: {metrics['total_tokens_estimated']}",
+                    source="session",
+                    tags=["session_summary", "metrics"],
+                    importance=6,
+                )
+
+            # 3. Flush qualquer buffer que restou
+            if self.memory_manager:
+                try:
+                    await self.memory_manager.flush()
+                except Exception:
+                    pass
+
+            log.info("✅ Session state persistido")
+        except Exception as e:
+            log.error("⚠️ Erro persistindo session state", error=str(e))
 
     # ============================================
     # PROCESS INPUT (Entry point para mensagens)

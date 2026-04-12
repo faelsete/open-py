@@ -338,3 +338,35 @@ class CortexResult(BaseModel):
     total_duration_ms: float = 0.0
     tokens_used: int = 0
     error: Optional[str] = None
+
+
+# ============================================
+# MODELOS v5.1 — GOALS + PROATIVIDADE
+# ============================================
+
+class GoalStatus(str, Enum):
+    """Status de um objetivo autônomo."""
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class Goal(BaseModel):
+    """Objetivo autônomo de longo prazo.
+    O agente persegue esses goals proativamente via scheduler.
+    """
+    id: Optional[int] = None
+    user_id: int = 0
+    title: str = ""
+    description: str = ""
+    status: GoalStatus = GoalStatus.ACTIVE
+    priority: int = 5  # 1-10
+    progress_pct: float = 0.0
+    last_action: str = ""
+    next_step: str = ""
+    max_daily_actions: int = 3
+    actions_today: int = 0
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+

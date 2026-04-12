@@ -159,6 +159,28 @@ CREATE TABLE IF NOT EXISTS core_memory_blocks (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (user_id, block_name)
 );
+
+-- ============================================
+-- TABELA: GOALS v5.1 (Objetivos autônomos)
+-- ============================================
+CREATE TABLE IF NOT EXISTS goals (
+    id              SERIAL PRIMARY KEY,
+    user_id         BIGINT NOT NULL DEFAULT 0,
+    title           VARCHAR(200) NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    status          VARCHAR(20) NOT NULL DEFAULT 'active',
+    priority        INTEGER NOT NULL DEFAULT 5,
+    progress_pct    REAL NOT NULL DEFAULT 0.0,
+    last_action     TEXT NOT NULL DEFAULT '',
+    next_step       TEXT NOT NULL DEFAULT '',
+    max_daily_actions INTEGER NOT NULL DEFAULT 3,
+    actions_today   INTEGER NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
+CREATE INDEX IF NOT EXISTS idx_goals_user ON goals(user_id);
 """
 
 # v4.1: Migração para alterar dimensões de vector em DBs existentes
@@ -227,7 +249,7 @@ async def check_tables(dsn: str) -> dict[str, bool]:
         """)
         existing = {r['tablename'] for r in tables}
         required = {'memories', 'daily_compilations', 'tasks', 'agent_logs',
-                     'agent_configs', 'cron_jobs', 'skills', 'core_memory_blocks'}
+                     'agent_configs', 'cron_jobs', 'skills', 'core_memory_blocks', 'goals'}
         return {t: t in existing for t in required}
     finally:
         await conn.close()

@@ -844,7 +844,7 @@ except Exception as e:
     print(f'WARN: {e}', file=sys.stderr)
     sys.exit(0)
 " >> "$LOG_FILE" 2>&1; then
-    ok "Banco de dados configurado (8 tabelas v5.0)"
+    ok "Banco de dados configurado (9 tabelas v5.1)"
 else
     warn "Migrations com avisos — verifique com: openpy doctor"
 fi
@@ -972,6 +972,25 @@ asyncio.run(show())
 " ;;
     cortex-stats)
         cd "$INSTALL_DIR" && journalctl -u open-py --no-hostname --no-pager -n 200 | grep -E 'depth=|Cortex|tokens' | tail -20 ;;
+    goals)
+        cd "$INSTALL_DIR" && "$VENV" -c "
+import asyncio, sys
+sys.path.insert(0, '$INSTALL_DIR')
+async def show():
+    import asyncpg
+    from shared.config import load_config
+    config = load_config()
+    pool = await asyncpg.create_pool(dsn=config.database.dsn)
+    rows = await pool.fetch('SELECT id, title, status, priority, progress_pct, next_step FROM goals ORDER BY priority DESC, created_at ASC')
+    if not rows:
+        print('Nenhum goal definido ainda.'); return
+    for r in rows:
+        status_icon = {'active': '🎯', 'completed': '✅', 'paused': '⏸️', 'failed': '❌'}.get(r['status'], '?')
+        print(f'  {status_icon} [{r[\"id\"]}] {r[\"title\"]} ({r[\"progress_pct\"]:.0f}%) P{r[\"priority\"]}')
+        if r['next_step']:
+            print(f'       → {r[\"next_step\"][:60]}')
+asyncio.run(show())
+" ;;
     *)
         echo ""
         echo "  🧠 Open-PY v\$(cat \$INSTALL_DIR/VERSION 2>/dev/null || echo '?') (Cortex)"
@@ -987,6 +1006,7 @@ asyncio.run(show())
         echo "  openpy soul          Editar memória permanente"
         echo "  openpy essence       Editar personalidade"
         echo "  openpy skills        Ver skills aprendidas"
+        echo "  openpy goals         Ver objetivos autônomos"
         echo "  openpy cortex-stats  Stats do Cortex"
         echo "  openpy update        Atualizar via GitHub"
         echo "  openpy version       Ver versão"

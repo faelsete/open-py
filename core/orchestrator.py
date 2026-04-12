@@ -469,3 +469,98 @@ Você é um agente do Open-PY. Regras invioláveis:
             ),
         }
 
+    # ============================================
+    # v5.1: API LIMPA PARA CORTEX
+    # ============================================
+
+    async def delegate(
+        self,
+        agent_name: str,
+        task_text: str,
+        tools: list[str] | None = None,
+        timeout: int = 120,
+    ) -> AgentResult:
+        """
+        v5.1: API limpa para o Cortex despachar tarefas a agentes.
+        Não requer ThinkingResult — converte automaticamente.
+        """
+        from shared.models import ThinkingResult, Urgency
+        thinking = ThinkingResult(
+            raw_input=task_text,
+            target_agent=agent_name,
+            delegation_reason=f"Cortex delegou para {agent_name}",
+            required_tools=tools or [],
+            urgency=Urgency.NORMAL,
+            task_id=f"CTX-{datetime.now().strftime('%H%M%S')}",
+        )
+        return await self.dispatch(thinking)
+
+    # ============================================
+    # v5.1: GOAL MANAGEMENT
+    # ============================================
+
+    async def create_goal(
+        self,
+        title: str,
+        description: str,
+        next_step: str,
+        user_id: int = 0,
+        priority: int = 5,
+        max_daily_actions: int = 3,
+    ) -> int | None:
+        """Cria um novo goal autônomo. Retorna ID do goal."""
+        if not self.db:
+            return None
+        try:
+            goal_id = await self.db.fetchval("""
+                INSERT INTO goals (user_id, title, description, next_step,
+                                   priority, max_daily_actions)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
+            """, user_id, title, description, next_step,
+                priority, max_daily_actions)
+            log.info("🎯 Goal criado", id=goal_id, title=title)
+            return goal_id
+        except Exception as e:
+            log.error("❌ Erro criando goal", error=str(e))
+            return None
+
+    async def list_goals(self, user_id: int = 0, status: str = "active") -> list[dict]:
+        """Lista goals por user e status."""
+        if not self.db:
+            return []
+        try:
+            rows = await self.db.fetch("""
+                SELECT id, title, description, status, priority,
+                       progress_pct, next_step, last_action,
+                       actions_today, max_daily_actions,
+                       created_at, updated_at
+                FROM goals
+                WHERE user_id = $1 AND ($2 = 'all' OR status = $2)
+                ORDER BY priority DESC, created_at ASC
+            """, user_id, status)
+            return [dict(r) for r in rows]
+        except Exception as e:
+            log.error("❌ Erro listando goals", error=str(e))
+            return []
+
+    async def update_goal(self, goal_id: int, **kwargs) -> bool:
+        """Atualiza campos de um goal."""
+        if not self.db:
+            return False
+        allowed = {"title", "description", "status", "priority",
+                   "next_step", "progress_pct", "max_daily_actions"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed}
+        if not updates:
+            return False
+        try:
+            set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates))
+            values = [goal_id] + list(updates.values())
+            await self.db.execute(
+                f"UPDATE goals SET {set_clause}, updated_at = NOW() WHERE id = $1",
+                *values,
+            )
+            return True
+        except Exception as e:
+            log.error("❌ Erro atualizando goal", error=str(e))
+            return False

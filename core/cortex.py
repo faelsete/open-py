@@ -692,6 +692,13 @@ class Cortex:
             return await self._tool_archival_insert(args.get("content", ""), args.get("tags", []))
         if tool_name == "skill_lookup":
             return await self._tool_skill_lookup(args.get("task", ""))
+        # v5.1: Goal tools
+        if tool_name == "create_goal":
+            return await self._tool_create_goal(args)
+        if tool_name == "list_goals":
+            return await self._tool_list_goals(args)
+        if tool_name == "update_goal":
+            return await self._tool_update_goal(args)
 
         # Tool registry padrão
         if self.tools:
@@ -812,6 +819,82 @@ class Cortex:
                     },
                 },
             },
+            # v5.1: Goal management tools
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_goal",
+                    "description": "Cria um objetivo autônomo de longo prazo que será perseguido proativamente",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Título curto do objetivo (ex: 'Monitorar servidor')",
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "Descrição detalhada do que deve ser alcançado",
+                            },
+                            "next_step": {
+                                "type": "string",
+                                "description": "Próxima ação concreta a executar",
+                            },
+                            "priority": {
+                                "type": "integer",
+                                "description": "Prioridade 1-10 (10 = máxima)",
+                            },
+                        },
+                        "required": ["title", "description", "next_step"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_goals",
+                    "description": "Lista objetivos autônomos (ativos, completos, todos)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "enum": ["active", "completed", "all"],
+                                "description": "Filtrar por status",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "update_goal",
+                    "description": "Atualiza um objetivo existente (status, próximo passo, progresso)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "goal_id": {
+                                "type": "integer",
+                                "description": "ID do goal",
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": ["active", "paused", "completed", "failed"],
+                            },
+                            "next_step": {
+                                "type": "string",
+                                "description": "Novo próximo passo",
+                            },
+                            "progress_pct": {
+                                "type": "number",
+                                "description": "Progresso 0-100%",
+                            },
+                        },
+                        "required": ["goal_id"],
+                    },
+                },
+            },
         ]
 
     def _tool_core_memory_read(self, block: str) -> str:
@@ -882,6 +965,49 @@ class Cortex:
         }, ensure_ascii=False)
 
     # ============================================
+    # v5.1: GOAL TOOLS
+    # ============================================
+
+    async def _tool_create_goal(self, args: dict) -> str:
+        """Cria um goal autônomo."""
+        orchestrator = self.orchestrator
+        if not orchestrator:
+            # Tentar via DB direto
+            return json.dumps({"error": "Orchestrator não disponível para goal management"})
+        goal_id = await orchestrator.create_goal(
+            title=args.get("title", ""),
+            description=args.get("description", ""),
+            next_step=args.get("next_step", ""),
+            priority=args.get("priority", 5),
+        )
+        if goal_id:
+            return json.dumps({"status": "created", "goal_id": goal_id, "title": args.get("title")})
+        return json.dumps({"error": "Falha ao criar goal"})
+
+    async def _tool_list_goals(self, args: dict) -> str:
+        """Lista goals."""
+        orchestrator = self.orchestrator
+        if not orchestrator:
+            return json.dumps({"error": "Orchestrator não disponível"})
+        status = args.get("status", "active")
+        goals = await orchestrator.list_goals(status=status)
+        return json.dumps({"goals": goals, "count": len(goals)}, default=str, ensure_ascii=False)
+
+    async def _tool_update_goal(self, args: dict) -> str:
+        """Atualiza goal."""
+        orchestrator = self.orchestrator
+        if not orchestrator:
+            return json.dumps({"error": "Orchestrator não disponível"})
+        goal_id = args.get("goal_id")
+        if not goal_id:
+            return json.dumps({"error": "goal_id é obrigatório"})
+        update_fields = {k: v for k, v in args.items() if k != "goal_id"}
+        success = await orchestrator.update_goal(goal_id, **update_fields)
+        if success:
+            return json.dumps({"status": "updated", "goal_id": goal_id})
+        return json.dumps({"error": f"Falha ao atualizar goal {goal_id}"})
+
+    # ============================================
     # MODEL/TOKEN SELECTION
     # ============================================
 
@@ -903,7 +1029,7 @@ class Cortex:
         }.get(depth, 1024)
 
     # ============================================
-    # POST-PROCESSING (não bloqueia resposta)
+    # POST-PROCESSING v5.1 (não bloqueia resposta)
     # ============================================
 
     async def _post_process(
@@ -915,26 +1041,80 @@ class Cortex:
         duration_ms: float,
         user_id: Optional[int] = None,
     ):
-        """Post-processing assíncrono — salva memória, skills, feedback."""
+        """v5.1: Post-processing completo — skill learning + user fact extraction."""
         try:
             # 1. Buffer de interação na memória
             if self.memory:
                 await self.memory.buffer_interaction(raw_input, response)
 
-            # 2. Salvar skill se foi task com tools bem-sucedida
+            # 2. Skill learning: salvar tasks com tools bem-sucedidas
             if tools_called and depth.value >= 2 and self.skills:
                 task_hash = hashlib.sha256(raw_input.lower().strip().encode()).hexdigest()[:16]
                 await self.skills.save_skill(
                     task_description=raw_input[:500],
                     task_hash=task_hash,
                     tools_used=tools_called,
-                    steps_json=[],  # Simplificado por agora
+                    steps_json=[{"tool": t, "order": i} for i, t in enumerate(tools_called)],
                     success=True,
                     duration_seconds=duration_ms / 1000,
                 )
+                log.info("📚 Skill aprendida", tools=tools_called, hash=task_hash[:8])
+
+            # 3. User fact extraction: detecta informações pessoais e preferências
+            if user_id and self.memory and depth.value >= 1:
+                facts = self._extract_user_facts(raw_input)
+                if facts:
+                    await self._auto_update_user_info(facts)
 
         except Exception as e:
             log.error("⚠️ Post-process falhou", error=str(e))
+
+    # ============================================
+    # USER FACT EXTRACTION (sem LLM)
+    # ============================================
+
+    _USER_FACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+        (re.compile(r"(?:meu nome|me chamo|eu sou o|sou a|meu nome é)\s+(\w+)", re.IGNORECASE), "nome"),
+        (re.compile(r"(?:eu moro em|moro em|sou de|eu sou de)\s+(.+?)[\.,!?]", re.IGNORECASE), "localização"),
+        (re.compile(r"(?:eu trabalho como|trabalho com|sou)\s+(dev|programador|engenheiro|designer|analista|gerente|estudante|freelancer)[\w\s]*", re.IGNORECASE), "profissão"),
+        (re.compile(r"(?:eu prefiro|prefiro|gosto de usar|uso)\s+(python|javascript|typescript|rust|go|java|c\+\+|react|vue|angular|tailwind|docker|linux|windows|mac)", re.IGNORECASE), "tech_preferência"),
+        (re.compile(r"(?:meu (?:e-?mail|email) é|email:?)\s+([\w.+-]+@[\w-]+\.\w+)", re.IGNORECASE), "email"),
+        (re.compile(r"(?:meu github|github:?)\s+([\w-]+)", re.IGNORECASE), "github"),
+        (re.compile(r"(?:eu tenho|tenho)\s+(\d{1,2})\s+anos", re.IGNORECASE), "idade"),
+        (re.compile(r"(?:responda em|fale em|use)\s+(inglês|english|português|spanish|espanhol)", re.IGNORECASE), "idioma_preferido"),
+    ]
+
+    def _extract_user_facts(self, text: str) -> list[tuple[str, str]]:
+        """Extrai fatos do usuário usando regex (zero cost LLM)."""
+        facts: list[tuple[str, str]] = []
+        for pattern, label in self._USER_FACT_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                value = match.group(1).strip()
+                facts.append((label, value))
+        return facts
+
+    async def _auto_update_user_info(self, facts: list[tuple[str, str]]):
+        """Atualiza core memory user_info block com fatos extraídos."""
+        blocks = getattr(self.memory, 'core_memory', {})
+        user_block = blocks.get("user_info")
+        if not user_block:
+            return
+
+        current = user_block.content
+        updated = False
+        for label, value in facts:
+            entry = f"- {label}: {value}"
+            if value.lower() not in current.lower():
+                current = current.rstrip() + f"\n{entry}"
+                updated = True
+                log.info("🧠 User fact detectado", label=label, value=value)
+
+        if updated and len(current) <= user_block.max_chars:
+            user_block.update(current)
+            # Persistir no PostgreSQL
+            if hasattr(self.memory, 'save_core_memory'):
+                asyncio.create_task(self.memory.save_core_memory())
 
     # ============================================
     # METRICS
@@ -947,3 +1127,4 @@ class Cortex:
             "depth_distribution": dict(self._depth_counts),
             "total_tokens_estimated": self._total_tokens,
         }
+
