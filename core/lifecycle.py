@@ -59,6 +59,9 @@ class OpenPY:
         self.cortex = None
         self.skill_store = None
 
+        # v5.1: Voice Engine (STT + TTS)
+        self.voice_engine = None
+
         # Histórico conversacional por usuário (RAM)
         self._conversation_histories: dict[int, list[dict]] = {}
         
@@ -153,7 +156,10 @@ class OpenPY:
         # 14. Scheduler (heartbeat + cron)
         await self._init_scheduler()
 
-        # 15. Telegram Bot
+        # 15. v5.1: Voice Engine (STT + TTS)
+        await self._init_voice()
+
+        # 16. Telegram Bot
         await self._init_telegram()
         
         # Injetar LLM router na Memória para Compactação
@@ -168,7 +174,7 @@ class OpenPY:
             await self.memory_manager.load_core_memory()
 
         self._running = True
-        log.info("🚀 Open-PY v5.0 pronto! (Cortex + SkillStore + Adaptive Thinking)")
+        log.info("🚀 Open-PY v5.1 pronto! (Cortex + SkillStore + Voice + Goals)")
 
     # ============================================
     # RUNNING
@@ -815,6 +821,25 @@ class OpenPY:
         except Exception as e:
             log.warning("⚠️ Skill Store indisponível", error=str(e))
             self.skill_store = None
+
+    async def _init_voice(self):
+        """v5.1: Inicializa Voice Engine (STT + TTS)"""
+        try:
+            from voice.engine import VoiceEngine
+            vc = self.config.voice
+            self.voice_engine = VoiceEngine(
+                whisper_model=vc.stt_model,
+                whisper_device=vc.stt_device,
+                whisper_compute=vc.stt_compute,
+                default_language=vc.tts_language,
+                tts_enabled=vc.tts_enabled,
+                stt_enabled=vc.stt_enabled,
+            )
+            await self.voice_engine.initialize()
+            log.info("✅ Voice Engine v5.1 pronto", status=self.voice_engine.status())
+        except Exception as e:
+            log.warning("⚠️ Voice Engine indisponível (instale: pip install faster-whisper piper-tts)", error=str(e))
+            self.voice_engine = None
 
     def _init_core_memory(self):
         """v5.0: Inicializa Core Memory blocks a partir de soul/essence"""

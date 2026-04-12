@@ -135,6 +135,20 @@ class SkillStoreConfig(BaseModel):
     max_skill_age_days: int = 90           # Idade máxima sem uso antes de purge
 
 
+class VoiceConfig(BaseModel):
+    """v5.1: Configuração de voz (STT + TTS)."""
+    # STT (Speech-to-Text) — faster-whisper
+    stt_enabled: bool = True
+    stt_model: str = "base"        # tiny, base, small, medium, large-v3
+    stt_device: str = "auto"       # auto, cpu, cuda
+    stt_compute: str = "auto"      # auto, int8, float16
+    # TTS (Text-to-Speech) — piper-tts
+    tts_enabled: bool = True
+    tts_language: str = "pt-BR"    # pt-BR, en-US, es-ES
+    tts_auto_reply: bool = False   # Responder com audio quando user manda audio
+    tts_max_chars: int = 2000      # Máximo de caracteres por síntese
+
+
 class ValidatorConfig(BaseModel):
     """Configuração do quality gate"""
     enabled: bool = True
@@ -181,6 +195,7 @@ class OpenPYConfig(BaseModel):
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)  # deprecated v5.0
     cortex: CortexConfig = Field(default_factory=CortexConfig)        # v5.0: substitui pipeline
     skill_store: SkillStoreConfig = Field(default_factory=SkillStoreConfig)  # v5.0
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)                  # v5.1: STT + TTS
     validator: ValidatorConfig = Field(default_factory=ValidatorConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)

@@ -823,6 +823,16 @@ max_skills = 500
 cleanup_days = 7
 max_skill_age_days = 90
 
+[voice]
+stt_enabled = true
+stt_model = "base"
+stt_device = "auto"
+stt_compute = "auto"
+tts_enabled = true
+tts_language = "pt-BR"
+tts_auto_reply = false
+tts_max_chars = 2000
+
 [doctor]
 auto_repair = true
 snapshot_on_startup = true

@@ -46,3 +46,7 @@ fpdf2>=2.7             # PDF creation
 PyMuPDF>=1.24          # PDF reading
 openpyxl>=3.1          # Excel creation
 Pillow>=10.0           # Screenshots
+
+# v5.1: Voice (STT + TTS)
+faster-whisper>=1.0    # Speech-to-Text (CTranslate2)
+piper-tts>=1.2         # Text-to-Speech (ONNX local)

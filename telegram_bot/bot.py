@@ -74,6 +74,7 @@ class TelegramBot:
 
         # Cache de messages para callback
         self._pending_replies: dict[int, types.Message] = {}
+        self._audio_input: dict[int, bool] = {}  # v5.1: Flag para TTS auto-reply
 
         # v4.0: Task Queue — fila de tarefas com prioridade
         self.queue = TaskQueue(max_concurrent=1)
@@ -556,7 +557,7 @@ class TelegramBot:
                 }
             )
 
-        # === ÁUDIO / VOZ ===
+        # === ÁUDIO / VOZ (v5.1: STT via faster-whisper) ===
         @self.dp.message(F.audio | F.voice)
         async def handle_audio(message: types.Message):
             if not self._is_authorized(message.from_user.id):
@@ -564,15 +565,34 @@ class TelegramBot:
             await message.chat.do("typing")
             file_id = (message.audio or message.voice).file_id
             file_path = await self._download_file(file_id, "audio")
-            
+
+            # v5.1: Transcrever localmente se VoiceEngine disponível
+            transcribed_text = ""
+            voice_engine = getattr(self.core, 'voice_engine', None)
+            if voice_engine and voice_engine._stt_available and file_path:
+                result = await voice_engine.transcribe(file_path)
+                transcribed_text = result.get("text", "")
+                if transcribed_text:
+                    lang = result.get("language", "?")
+                    conf = result.get("confidence", 0)
+                    log.info("🎤 Áudio transcrito",
+                             chars=len(transcribed_text),
+                             lang=lang,
+                             confidence=f"{conf:.2f}")
+
+            # Se transcreveu, enviar como texto; senão, fallback antigo
+            input_text = transcribed_text or message.caption or "Transcreva este áudio"
+            input_type = "text" if transcribed_text else "audio"
+
             self._pending_replies[message.chat.id] = message
+            self._audio_input[message.chat.id] = bool(transcribed_text)  # Flag para TTS reply
             await self.batcher.add_message(
                 chat_id=message.chat.id,
                 message={
-                    "text": message.caption or "Transcreva este áudio",
-                    "input_type": "audio",
+                    "text": input_text,
+                    "input_type": input_type,
                     "user_id": message.from_user.id,
-                    "attachments": [file_path] if file_path else [],
+                    "attachments": [file_path] if (file_path and not transcribed_text) else [],
                 }
             )
 
@@ -640,6 +660,17 @@ class TelegramBot:
             elif event["type"] == "final":
                 await updater.update(content)
                 await updater.finalize()
+
+                # v5.1: TTS auto-reply — responder com áudio se user mandou áudio
+                if self._audio_input.pop(chat_id, False):
+                    voice_engine = getattr(self.core, 'voice_engine', None)
+                    voice_config = getattr(self.core.config, 'voice', None)
+                    if (voice_engine and voice_engine._tts_available
+                            and voice_config and voice_config.tts_auto_reply
+                            and content and len(content) <= voice_config.tts_max_chars):
+                        asyncio.create_task(
+                            self._send_voice_reply(chat_id, content, voice_engine)
+                        )
                 
                 # Learner (background)
                 asyncio.create_task(self.learner.learn_from_interaction(
@@ -704,6 +735,30 @@ class TelegramBot:
             if task.on_event:
                 await task.on_event({"type": "final", "content": err_msg})
             return {"response": err_msg, "status": "error"}
+
+    # ============================================
+    # v5.1: TTS VOICE REPLY
+    # ============================================
+
+    async def _send_voice_reply(self, chat_id: int, text: str, voice_engine):
+        """Sintetiza texto em áudio e envia como voice message."""
+        try:
+            audio_path = await voice_engine.synthesize(text, output_format="ogg")
+            if audio_path and os.path.exists(audio_path):
+                from aiogram.types import FSInputFile
+                voice_file = FSInputFile(audio_path)
+                await self._bot.send_voice(
+                    chat_id=chat_id,
+                    voice=voice_file,
+                )
+                log.info("🔊 TTS enviado", chat_id=chat_id, chars=len(text))
+                # Limpar arquivo temporário
+                try:
+                    os.unlink(audio_path)
+                except OSError:
+                    pass
+        except Exception as e:
+            log.warning("⚠️ Falha ao enviar TTS", error=str(e))
 
     # ============================================
     # AUTH
