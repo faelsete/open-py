@@ -177,9 +177,12 @@ async def run_repl() -> None:
     config = load_config()
     print_banner(config)
 
-    # Inicializar core (lightweight — sem Telegram, sem scheduler)
-    from core.lifecycle import OpenPYCore
-    core = await OpenPYCore.create(config)
+    # Inicializar core (mesmo pipeline do Telegram)
+    from core.lifecycle import OpenPY
+    core = OpenPY()
+    print(f"  {DIM}⏳ Carregando core...{RESET}", end="", flush=True)
+    await core.startup()
+    print(f"\r  {GREEN}✅ Core pronto{RESET}          ")
 
     # Histórico readline
     history_file = os.path.join(INSTALL_DIR, "data", ".repl_history")
@@ -212,8 +215,8 @@ async def run_repl() -> None:
         if user_input.startswith("/"):
             result = handle_slash_command(user_input, config)
             if result == "clear":
-                # Reiniciar core para limpar histórico
-                core = await OpenPYCore.create(config)
+                # Limpar histórico conversacional
+                core._conversation_histories.clear()
                 continue
             elif result == "tokens":
                 print(f"\n  {BOLD}📊 Tokens da sessão:{RESET}")
