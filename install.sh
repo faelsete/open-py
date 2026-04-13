@@ -1059,28 +1059,231 @@ async def show():
             print(f'       → {r[\"next_step\"][:60]}')
 asyncio.run(show())
 " ;;
+    model)
+        shift
+        cd "$INSTALL_DIR"
+        case "${1:-show}" in
+            show|"")
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config
+c = load_config()
+provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'openrouter': c.providers.openrouter, 'nvidia': c.providers.nvidia, 'opencode': c.providers.opencode}
+active = None
+for name, p in provs.items():
+    if p.enabled and p.api_key:
+        if not active: active = name
+        marker = ' ← ativo' if not active or name == active else ''
+        model = p.model or '(default)'
+        print(f'  {name}: {model}{marker}')
+if c.core.default_model:
+    print(f'\n  default_model: {c.core.default_model}')
+if c.core.fallback_model:
+    print(f'  fallback_model: {c.core.fallback_model}')
+" ;;
+            set)
+                MODEL="${2:-}"
+                if [[ -z "$MODEL" ]]; then
+                    echo "Uso: openpy model set <nome-do-modelo>"
+                    echo "Exemplo: openpy model set deepseek/deepseek-chat-v3-0324"
+                    exit 1
+                fi
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config, save_config
+c = load_config()
+provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'openrouter': c.providers.openrouter, 'nvidia': c.providers.nvidia, 'opencode': c.providers.opencode}
+for name, p in provs.items():
+    if p.enabled and p.api_key:
+        p.model = '$MODEL'
+        save_config(c)
+        print(f'✅ Modelo do {name} alterado para: $MODEL')
+        print('⚠️  Execute: openpy restart')
+        break
+else:
+    print('❌ Nenhum provedor ativo encontrado')
+" ;;
+            list)
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config
+c = load_config()
+provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'openrouter': c.providers.openrouter, 'nvidia': c.providers.nvidia, 'opencode': c.providers.opencode}
+print('Provedores configurados e seus modelos:\n')
+for name, p in provs.items():
+    if p.enabled and p.api_key:
+        model = p.model or '(default do código)'
+        print(f'  ✅ {name}: {model}')
+    else:
+        print(f'  ⬚  {name}: desabilitado')
+" ;;
+            *) echo "Uso: openpy model [show|set|list]" ;;
+        esac ;;
+    provider)
+        shift
+        cd "$INSTALL_DIR"
+        case "${1:-show}" in
+            show|"")
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config
+c = load_config()
+provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'openrouter': c.providers.openrouter, 'nvidia': c.providers.nvidia, 'opencode': c.providers.opencode}
+print('Provedores:\n')
+for name, p in provs.items():
+    if p.enabled and p.api_key:
+        key_preview = p.api_key[:8] + '...' + p.api_key[-4:]
+        model = p.model or '(default)'
+        print(f'  ✅ {name}')
+        print(f'     modelo: {model}')
+        print(f'     key: {key_preview}')
+        if p.api_base: print(f'     base: {p.api_base}')
+        print()
+" ;;
+            list)
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config
+c = load_config()
+provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'openrouter': c.providers.openrouter, 'nvidia': c.providers.nvidia, 'opencode': c.providers.opencode}
+for name, p in provs.items():
+    status = '✅' if (p.enabled and p.api_key) else '⬚ '
+    print(f'  {status} {name}')
+" ;;
+            add)
+                PROV_NAME="${2:-}"
+                PROV_KEY="${3:-}"
+                if [[ -z "$PROV_NAME" || -z "$PROV_KEY" ]]; then
+                    echo "Uso: openpy provider add <nome> <api-key> [modelo]"
+                    echo ""
+                    echo "  Nomes: openai, anthropic, openrouter, nvidia, opencode"
+                    echo ""
+                    echo "Exemplos:"
+                    echo "  openpy provider add openrouter sk-or-v1-abc123"
+                    echo "  openpy provider add openai sk-abc123 gpt-4o"
+                    exit 1
+                fi
+                PROV_MODEL="${4:-}"
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config, save_config
+c = load_config()
+name = '$PROV_NAME'
+if not hasattr(c.providers, name):
+    print(f'❌ Provedor \"{name}\" não existe. Use: openai, anthropic, openrouter, nvidia, opencode')
+    sys.exit(1)
+p = getattr(c.providers, name)
+p.api_key = '$PROV_KEY'
+p.enabled = True
+model = '$PROV_MODEL'
+if model: p.model = model
+save_config(c)
+print(f'✅ Provedor {name} ativado')
+if model: print(f'   Modelo: {model}')
+print(f'   Key: ${PROV_KEY:0:8}...${PROV_KEY: -4}')
+print('⚠️  Execute: openpy restart')
+" ;;
+            enable)
+                PROV="${2:-}"
+                [[ -z "$PROV" ]] && { echo "Uso: openpy provider enable <nome>"; exit 1; }
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config, save_config
+c = load_config()
+if hasattr(c.providers, '$PROV'):
+    p = getattr(c.providers, '$PROV')
+    p.enabled = True
+    save_config(c)
+    print('✅ $PROV habilitado')
+    print('⚠️  Execute: openpy restart')
+else:
+    print('❌ Provedor não encontrado')
+" ;;
+            disable)
+                PROV="${2:-}"
+                [[ -z "$PROV" ]] && { echo "Uso: openpy provider disable <nome>"; exit 1; }
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config, save_config
+c = load_config()
+if hasattr(c.providers, '$PROV'):
+    p = getattr(c.providers, '$PROV')
+    p.enabled = False
+    save_config(c)
+    print('✅ $PROV desabilitado')
+    print('⚠️  Execute: openpy restart')
+else:
+    print('❌ Provedor não encontrado')
+" ;;
+            *) echo "Uso: openpy provider [show|list|add|enable|disable]" ;;
+        esac ;;
+    tokens)
+        cd "$INSTALL_DIR"
+        journalctl -u open-py --no-hostname --no-pager -n 500 | grep -oP 'prompt=\d+|completion=\d+|total=\d+' | \
+        awk -F= '{sums[$1]+=$2; count[$1]++} END {
+            printf "\n  📊 Estatísticas de tokens (últimas 500 linhas de log):\n\n";
+            for(k in sums) printf "  %-12s %d (em %d chamadas)\n", k":", sums[k], count[k]
+        }' ;;
+    memory)
+        shift
+        cd "$INSTALL_DIR"
+        case "${1:-show}" in
+            show|"")
+                echo ""
+                echo "  📝 Soul (memória permanente):"
+                echo "  ─────────────────────────────"
+                cat "$INSTALL_DIR/data/soul.md" 2>/dev/null || echo "  (vazio)"
+                echo ""
+                echo "  🎭 Essence (personalidade):"
+                echo "  ─────────────────────────────"
+                cat "$INSTALL_DIR/data/essence.md" 2>/dev/null || echo "  (vazio)"
+                echo "" ;;
+            edit-soul) ${EDITOR:-nano} "$INSTALL_DIR/data/soul.md" ;;
+            edit-essence) ${EDITOR:-nano} "$INSTALL_DIR/data/essence.md" ;;
+            *) echo "Uso: openpy memory [show|edit-soul|edit-essence]" ;;
+        esac ;;
+    chat)
+        cd "$INSTALL_DIR"
+        "$VENV" "$INSTALL_DIR/cli/repl.py" ;;
     *)
         echo ""
         echo "  🧠 Open-PY v\$(cat \$INSTALL_DIR/VERSION 2>/dev/null || echo '?') (Cortex)"
         echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "  SERVIÇO:"
         echo "  openpy start         Iniciar"
         echo "  openpy stop          Parar"
         echo "  openpy restart       Reiniciar"
         echo "  openpy status        Status do serviço"
         echo "  openpy logs          Logs em tempo real"
         echo "  openpy logs -n 50    Últimas 50 linhas"
-        echo "  openpy doctor        Diagnóstico completo"
-        echo "  openpy config        Editar configuração"
+        echo ""
+        echo "  LLM:"
+        echo "  openpy model         Ver modelo ativo"
+        echo "  openpy model set X   Trocar modelo"
+        echo "  openpy model list    Listar modelos"
+        echo "  openpy provider      Ver provedor ativo"
+        echo "  openpy provider list Listar provedores"
+        echo "  openpy provider add  Adicionar provedor"
+        echo ""
+        echo "  AGENTE:"
+        echo "  openpy chat          Chat interativo (terminal)"
+        echo "  openpy memory        Ver memória"
         echo "  openpy soul          Editar memória permanente"
         echo "  openpy essence       Editar personalidade"
         echo "  openpy skills        Ver skills aprendidas"
         echo "  openpy goals         Ver objetivos autônomos"
+        echo "  openpy tokens        Estatísticas de tokens"
         echo "  openpy cortex-stats  Stats do Cortex"
+        echo ""
+        echo "  SISTEMA:"
+        echo "  openpy doctor        Diagnóstico completo"
+        echo "  openpy config        Editar configuração"
         echo "  openpy update        Atualizar via GitHub"
         echo "  openpy version       Ver versão"
         echo "  openpy tags          Listar versões"
         echo "  openpy rollback      Voltar para versão anterior"
-        echo "  openpy nuke          ☢️  Reset nuclear (apaga TUDO)"
+        echo "  openpy nuke          ☢️  Reset nuclear"
         echo "  openpy uninstall     Remover tudo"
         echo "" ;;
 esac
