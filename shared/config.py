@@ -24,7 +24,7 @@ class CoreConfig(BaseModel):
     max_concurrent_agents: int = 10
     thinking_layers: int = 4
     install_dir: str = "/opt/open-py"
-    log_level: str = "DEBUG"  # DEBUG, INFO, WARNING, ERROR
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
 
 class DatabaseConfig(BaseModel):
