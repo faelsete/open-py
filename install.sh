@@ -1069,13 +1069,16 @@ import sys; sys.path.insert(0,'$INSTALL_DIR')
 from shared.config import load_config
 c = load_config()
 provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'openrouter': c.providers.openrouter, 'nvidia': c.providers.nvidia, 'opencode': c.providers.opencode}
-active = None
 for name, p in provs.items():
     if p.enabled and p.api_key:
-        if not active: active = name
-        marker = ' ← ativo' if not active or name == active else ''
         model = p.model or '(default)'
-        print(f'  {name}: {model}{marker}')
+        extras = len(p.models) if p.models else 0
+        extra_txt = f' (+{extras} no pool)' if extras else ''
+        print(f'  ⭐ {name}: {model}{extra_txt}')
+        if p.models:
+            for i, m in enumerate(p.models):
+                marker = ' ← ativo' if m == p.model else ''
+                print(f'     {i+1}. {m}{marker}')
 if c.core.default_model:
     print(f'\n  default_model: {c.core.default_model}')
 if c.core.fallback_model:
@@ -1096,9 +1099,36 @@ provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'open
 for name, p in provs.items():
     if p.enabled and p.api_key:
         p.model = '$MODEL'
+        if '$MODEL' not in (p.models or []):
+            p.models = (p.models or []) + ['$MODEL']
         save_config(c)
         print(f'✅ Modelo do {name} alterado para: $MODEL')
         print('⚠️  Execute: openpy restart')
+        break
+else:
+    print('❌ Nenhum provedor ativo encontrado')
+" ;;
+            add)
+                MODEL="${2:-}"
+                if [[ -z "$MODEL" ]]; then
+                    echo "Uso: openpy model add <nome-do-modelo>"
+                    echo "Adiciona modelo ao pool do provedor ativo (sem trocar o ativo)"
+                    exit 1
+                fi
+                "$VENV" -c "
+import sys; sys.path.insert(0,'$INSTALL_DIR')
+from shared.config import load_config, save_config
+c = load_config()
+provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'openrouter': c.providers.openrouter, 'nvidia': c.providers.nvidia, 'opencode': c.providers.opencode}
+for name, p in provs.items():
+    if p.enabled and p.api_key:
+        if '$MODEL' in (p.models or []):
+            print('⚠️  Modelo já está no pool')
+        else:
+            p.models = (p.models or []) + ['$MODEL']
+            save_config(c)
+            print(f'✅ Adicionado ao pool do {name}')
+            print('⚠️  Execute: openpy restart')
         break
 else:
     print('❌ Nenhum provedor ativo encontrado')
@@ -1109,15 +1139,20 @@ import sys; sys.path.insert(0,'$INSTALL_DIR')
 from shared.config import load_config
 c = load_config()
 provs = {'openai': c.providers.openai, 'anthropic': c.providers.anthropic, 'openrouter': c.providers.openrouter, 'nvidia': c.providers.nvidia, 'opencode': c.providers.opencode}
-print('Provedores configurados e seus modelos:\n')
 for name, p in provs.items():
     if p.enabled and p.api_key:
-        model = p.model or '(default do código)'
-        print(f'  ✅ {name}: {model}')
+        model = p.model or '(default)'
+        print(f'\n  ✅ {name} (ativo: {model})')
+        if p.models:
+            for i, m in enumerate(p.models):
+                marker = ' ← ativo' if m == p.model else ''
+                print(f'     {i+1}. {m}{marker}')
+        else:
+            print(f'     (sem pool de modelos)')
     else:
         print(f'  ⬚  {name}: desabilitado')
 " ;;
-            *) echo "Uso: openpy model [show|set|list]" ;;
+            *) echo "Uso: openpy model [show|set|add|list]" ;;
         esac ;;
     provider)
         shift

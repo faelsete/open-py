@@ -73,6 +73,12 @@ class LLMRouter:
 
             self._add_to_list(name, litellm_model, p.api_key, **kwargs)
 
+            # Registrar modelos extras como fallback
+            for extra_model in (p.models or []):
+                if extra_model and extra_model != raw_model:
+                    extra_litellm = self._apply_prefix(name, extra_model)
+                    self._add_to_list(name, extra_litellm, p.api_key, **kwargs)
+
         self._rebuild_router()
 
     def _add_to_list(self, name: str, model: str, api_key: str, api_base: str = None):

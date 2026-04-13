@@ -120,29 +120,33 @@ def setup_telegram(config) -> None:
 
 
 def setup_providers(config) -> None:
-    """Gerencia provedores"""
+    """Gerencia provedores e seus modelos"""
     provs = get_providers(config)
 
     while True:
         print(f"\n  {B}═══ PROVEDORES LLM ═══{R}\n")
 
-        # Listar
-        idx = 1
+        # Listar com modelos
         prov_list = []
         for name, p in provs.items():
             if p.enabled and p.api_key:
                 model = p.model or "(default)"
-                print(f"  {G}{idx}{R} — {G}✅ {name}{R}: {model}")
+                extras = len(p.models) if p.models else 0
+                extra_txt = f" (+{extras} fallback)" if extras else ""
+                print(f"  {G}✅ {name}{R}: {C}{model}{R}{extra_txt}")
+                if p.models:
+                    for i, m in enumerate(p.models):
+                        marker = " ← ativo" if m == p.model else ""
+                        print(f"     {D}{i+1}. {m}{marker}{R}")
             else:
-                print(f"  {D}{idx}{R} — {D}⬚  {name}: desabilitado{R}")
+                print(f"  {D}⬚  {name}: desabilitado{R}")
             prov_list.append(name)
-            idx += 1
 
         print(f"""
   {B}Ações:{R}
   {C}a{R} — Ativar/configurar provedor
   {C}d{R} — Desativar provedor
-  {C}m{R} — Trocar modelo de um provedor
+  {C}m{R} — Gerenciar modelos de um provedor
   {C}v{R} — Voltar
 """)
         action = input(f"  {B}Ação:{R} ").strip().lower()
@@ -174,10 +178,13 @@ def setup_providers(config) -> None:
                 if base:
                     p.api_base = base
 
-            # Modelo
-            model = input_default("Modelo", p.model or "")
+            # Modelo principal
+            model = input_default("Modelo ativo", p.model or "")
             if model:
                 p.model = model
+                # Adicionar ao pool se não estiver
+                if model not in (p.models or []):
+                    p.models = (p.models or []) + [model]
 
             print(f"  {G}✅ {name} ativado{R}")
 
@@ -190,14 +197,105 @@ def setup_providers(config) -> None:
                 print(f"  {RED}❌ Provedor não encontrado{R}")
 
         elif action == "m":
-            name = input(f"  Qual provedor? ").strip().lower()
-            if name in provs and provs[name].enabled:
-                model = input_default("Novo modelo", provs[name].model or "")
-                if model:
-                    provs[name].model = model
-                    print(f"  {G}✅ Modelo do {name} alterado para: {model}{R}")
+            _manage_models(provs)
+
+
+def _manage_models(provs: dict) -> None:
+    """Sub-menu de gerenciamento de modelos"""
+    # Escolher provedor
+    active = [n for n, p in provs.items() if p.enabled and p.api_key]
+    if not active:
+        print(f"  {RED}❌ Nenhum provedor ativo{R}")
+        return
+
+    print(f"\n  Provedores ativos: {', '.join(active)}")
+    name = input(f"  Qual provedor? ").strip().lower()
+    if name not in active:
+        print(f"  {RED}❌ Provedor não encontrado ou inativo{R}")
+        return
+
+    p = provs[name]
+
+    while True:
+        print(f"\n  {B}═══ MODELOS: {name.upper()} ═══{R}\n")
+
+        # Modelo ativo
+        print(f"  {G}⭐ Ativo:{R} {C}{p.model or '(nenhum)'}{R}")
+
+        # Pool de modelos
+        if p.models:
+            print(f"\n  {B}Pool de modelos ({len(p.models)}):{R}")
+            for i, m in enumerate(p.models):
+                marker = f" {G}← ativo{R}" if m == p.model else ""
+                print(f"    {C}{i+1}{R}. {m}{marker}")
+        else:
+            print(f"\n  {D}Nenhum modelo no pool{R}")
+
+        print(f"""
+  {B}Ações:{R}
+  {C}a{R} — Adicionar modelo ao pool
+  {C}r{R} — Remover modelo do pool
+  {C}s{R} — Trocar modelo ativo (switch)
+  {C}v{R} — Voltar
+""")
+        action = input(f"  {B}Ação:{R} ").strip().lower()
+
+        if action == "v" or action == "":
+            break
+
+        elif action == "a":
+            model = input(f"  Nome do modelo: ").strip()
+            if not model:
+                continue
+            if model in (p.models or []):
+                print(f"  {Y}⚠️  Modelo já está no pool{R}")
+                continue
+            p.models = (p.models or []) + [model]
+            # Se não tem modelo ativo, ativar este
+            if not p.model:
+                p.model = model
+                print(f"  {G}✅ {model} adicionado e ativado{R}")
             else:
-                print(f"  {RED}❌ Provedor não encontrado ou desabilitado{R}")
+                print(f"  {G}✅ {model} adicionado ao pool{R}")
+
+        elif action == "r":
+            if not p.models:
+                print(f"  {RED}❌ Pool vazio{R}")
+                continue
+            idx = input(f"  Número do modelo pra remover: ").strip()
+            try:
+                idx_int = int(idx) - 1
+                if 0 <= idx_int < len(p.models):
+                    removed = p.models.pop(idx_int)
+                    # Se removeu o ativo, trocar pro primeiro do pool
+                    if removed == p.model:
+                        p.model = p.models[0] if p.models else ""
+                        if p.model:
+                            print(f"  {Y}⚠️  Modelo ativo trocado para: {p.model}{R}")
+                    print(f"  {G}✅ {removed} removido{R}")
+                else:
+                    print(f"  {RED}❌ Número inválido{R}")
+            except ValueError:
+                print(f"  {RED}❌ Digite um número{R}")
+
+        elif action == "s":
+            if not p.models or len(p.models) < 2:
+                print(f"  {Y}⚠️  Adicione mais modelos primeiro{R}")
+                continue
+            print(f"\n  Escolha o modelo ativo:")
+            for i, m in enumerate(p.models):
+                marker = " ← atual" if m == p.model else ""
+                print(f"    {C}{i+1}{R}. {m}{marker}")
+            idx = input(f"  Número: ").strip()
+            try:
+                idx_int = int(idx) - 1
+                if 0 <= idx_int < len(p.models):
+                    p.model = p.models[idx_int]
+                    print(f"  {G}✅ Modelo ativo: {p.model}{R}")
+                else:
+                    print(f"  {RED}❌ Número inválido{R}")
+            except ValueError:
+                print(f"  {RED}❌ Digite um número{R}")
 
 
 def setup_model(config) -> None:

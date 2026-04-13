@@ -165,7 +165,8 @@ class ProviderConfig(BaseModel):
     api_key: str = ""
     api_base: str = ""
     enabled: bool = False
-    model: str = ""  # Modelo específico deste provedor (sem prefixo LiteLLM)
+    model: str = ""  # Modelo ativo (sem prefixo LiteLLM)
+    models: list[str] = Field(default_factory=list)  # Pool de modelos disponíveis + fallback
 
 
 class ProvidersConfig(BaseModel):
