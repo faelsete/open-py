@@ -17,7 +17,7 @@ from typing import Optional
 
 class CoreConfig(BaseModel):
     name: str = "Open-PY"
-    version: str = "4.1.0"
+    version: str = "5.1.0"
     language: str = "pt-BR"
     default_model: str = ""
     fallback_model: str = ""

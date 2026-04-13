@@ -24,8 +24,8 @@ class LLMRouter:
     DEFAULT_MODELS = {
         "openai": "gpt-4o-mini",
         "anthropic": "claude-sonnet-4-20250514",
-        "openrouter": "qwen/qwen3-235b-a22b:free",
-        "nvidia": "nvidia-model",
+        "openrouter": "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia": "meta/llama-3.3-70b-instruct",
         "opencode": "custom-model",
     }
 

@@ -363,13 +363,13 @@ class OpenPY:
                     yield event
 
             if not cortex_result:
-                yield {"type": "error", "message": "Cortex falhou ao retornar resultado final."}
+                yield {"type": "final", "content": "⚠️ Cortex não retornou resultado.", "message": "Cortex falhou ao retornar resultado final."}
                 return
 
             if not cortex_result.success:
                 error_msg = f"⚠️ Cortex falhou: {getattr(cortex_result, 'error', 'Erro desconhecido')}"
                 log.error(error_msg)
-                yield {"type": "error", "message": error_msg}
+                yield {"type": "final", "content": error_msg, "message": error_msg}
                 return
 
             response_text = cortex_result.response
@@ -426,6 +426,7 @@ class OpenPY:
 
             yield {
                 "type": "final",
+                "content": response_text,
                 "response": response_text,
                 "status": "completed",
                 "task_id": cortex_result.task_id,
@@ -436,9 +437,11 @@ class OpenPY:
 
         except Exception as e:
             log.error("⚠️ Erro global no processamento", error=str(e))
+            err_content = f"⚠️ Ocorreu um erro interno ao processar sua mensagem:\n\n`{str(e)}`"
             yield {
-                "type": "error",
-                "message": f"⚠️ Ocorreu um erro interno ao processar sua mensagem:\n\n`{str(e)}`",
+                "type": "final",
+                "content": err_content,
+                "message": err_content,
                 "status": "error"
             }
 
