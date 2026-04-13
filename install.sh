@@ -974,7 +974,7 @@ case "${1:-help}" in
     version)  cat "$INSTALL_DIR/VERSION" 2>/dev/null || echo "?" ;;
     update)
         echo "🔄 Atualizando Open-PY..."
-        cd "$INSTALL_DIR" && git pull origin main 2>/dev/null || git pull origin master
+        cd "$INSTALL_DIR" && git pull origin main
         source "$INSTALL_DIR/venv/bin/activate"
         pip install -q -r "$INSTALL_DIR/requirements.txt" 2>/dev/null
         systemctl restart open-py && echo "✅ Atualizado e reiniciado"
