@@ -1245,6 +1245,9 @@ else:
     chat)
         cd "$INSTALL_DIR"
         "$VENV" "$INSTALL_DIR/cli/repl.py" ;;
+    setup)
+        cd "$INSTALL_DIR"
+        "$VENV" "$INSTALL_DIR/cli/setup.py" ;;
     *)
         echo ""
         echo "  🧠 Open-PY v\$(cat \$INSTALL_DIR/VERSION 2>/dev/null || echo '?') (Cortex)"
@@ -1283,6 +1286,7 @@ else:
         echo "  openpy version       Ver versão"
         echo "  openpy tags          Listar versões"
         echo "  openpy rollback      Voltar para versão anterior"
+        echo "  openpy setup         ⚙️  Wizard de reconfiguração"
         echo "  openpy nuke          ☢️  Reset nuclear"
         echo "  openpy uninstall     Remover tudo"
         echo "" ;;
