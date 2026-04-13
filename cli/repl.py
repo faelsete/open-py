@@ -284,16 +284,32 @@ async def run_repl() -> None:
 
 def main() -> None:
     """Entrypoint"""
+    import logging
+    import warnings
+
     # Ignorar SIGINT gracefully
     signal.signal(signal.SIGINT, lambda *_: None)
+
+    # Suprimir erros de SSL transport no exit (cleanup do asyncio)
+    warnings.filterwarnings("ignore", category=ResourceWarning)
+    logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+
+    # Silenciar logs do startup (vão pro stderr normalmente)
+    logging.getLogger().setLevel(logging.CRITICAL)
 
     try:
         asyncio.run(run_repl())
     except KeyboardInterrupt:
         print(f"\n  {YELLOW}👋 Até mais!{RESET}\n")
+    except SystemExit:
+        pass
     except Exception as e:
         print(f"\n  {RED}❌ Erro fatal: {e}{RESET}\n")
         sys.exit(1)
+    finally:
+        # Suprimir erros de cleanup
+        import sys as _sys
+        _sys.stderr = open(os.devnull, "w")
 
 
 if __name__ == "__main__":
